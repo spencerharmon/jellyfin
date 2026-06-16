@@ -40,7 +40,7 @@ namespace Jellyfin.LiveTv.Channels
     /// <summary>
     /// The LiveTV channel manager.
     /// </summary>
-    public class ChannelManager : IChannelManager, IDisposable
+    public class ChannelManager : IChannelManager, IChannelItemRefreshManager, IDisposable
     {
         private readonly IUserManager _userManager;
         private readonly IUserDataManager _userDataManager;
@@ -957,13 +957,16 @@ namespace Jellyfin.LiveTv.Channels
             return item;
         }
 
-        private async Task<BaseItem> GetChannelItemEntityAsync(ChannelItemInfo info, IChannel channelProvider, Guid internalChannelId, BaseItem parentFolder, CancellationToken cancellationToken)
+        private Task<BaseItem> GetChannelItemEntityAsync(ChannelItemInfo info, IChannel channelProvider, Guid internalChannelId, BaseItem parentFolder, CancellationToken cancellationToken)
+            => GetChannelItemEntityAsync(info, channelProvider, internalChannelId, parentFolder, forceUpdateParam: false, forceProbe: false, cancellationToken);
+
+        private async Task<BaseItem> GetChannelItemEntityAsync(ChannelItemInfo info, IChannel channelProvider, Guid internalChannelId, BaseItem parentFolder, bool forceUpdateParam, bool forceProbe, CancellationToken cancellationToken)
         {
             var parentFolderId = parentFolder.Id;
 
             BaseItem item;
             bool isNew;
-            bool forceUpdate = false;
+            bool forceUpdate = forceUpdateParam;
 
             if (info.Type == ChannelItemType.Folder)
             {
@@ -1001,7 +1004,7 @@ namespace Jellyfin.LiveTv.Channels
             {
                 item.RunTimeTicks = null;
             }
-            else if (isNew || !enableMediaProbe)
+            else if (isNew || !enableMediaProbe || forceProbe)
             {
                 item.RunTimeTicks = info.RunTimeTicks;
             }
@@ -1166,12 +1169,99 @@ namespace Jellyfin.LiveTv.Channels
                 }
             }
 
-            if (isNew || forceUpdate || item.DateLastRefreshed == DateTime.MinValue)
+            if (isNew || forceUpdate || forceProbe || item.DateLastRefreshed == DateTime.MinValue)
             {
-                _providerManager.QueueRefresh(item.Id, new MetadataRefreshOptions(new DirectoryService(_fileSystem)), RefreshPriority.Normal);
+                var refreshOptions = new MetadataRefreshOptions(new DirectoryService(_fileSystem));
+                if (forceProbe)
+                {
+                    refreshOptions.EnableRemoteContentProbe = true;
+                    refreshOptions.MetadataRefreshMode = MetadataRefreshMode.FullRefresh;
+                }
+
+                _providerManager.QueueRefresh(item.Id, refreshOptions, RefreshPriority.Normal);
             }
 
             return item;
+        }
+
+        /// <inheritdoc />
+        public async Task RefreshChannelItemAsync(
+            Guid channelId,
+            string channelItemExternalId,
+            ChannelItemRefreshOptions options = null,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(channelItemExternalId);
+            options ??= new ChannelItemRefreshOptions();
+
+            var channelEntity = _libraryManager.GetItemById(channelId) as Channel
+                ?? throw new InvalidOperationException(
+                    $"Channel BaseItem {channelId} not found or wrong type");
+
+            var provider = GetChannelProvider(channelEntity)
+                ?? throw new InvalidOperationException(
+                    $"No IChannel provider registered for channel {channelId}");
+
+            // Resolve the fresh ChannelItemInfo. Prefer targeted lookup if
+            // the channel implements IChannelItemRefresh; otherwise page
+            // GetChannelItems at the root.
+            ChannelItemInfo info = null;
+            if (provider is IChannelItemRefresh targeted)
+            {
+                info = await targeted.GetChannelItemAsync(
+                    channelItemExternalId, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                var query = new InternalChannelItemQuery
+                {
+                    FolderId = null,
+                    StartIndex = 0,
+                    Limit = int.MaxValue,
+                };
+                var result = await provider.GetChannelItems(query, cancellationToken)
+                    .ConfigureAwait(false);
+                if (result?.Items is { } items)
+                {
+                    foreach (var candidate in items)
+                    {
+                        if (string.Equals(candidate.Id, channelItemExternalId, StringComparison.Ordinal))
+                        {
+                            info = candidate;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (info is null)
+            {
+                _logger.LogDebug(
+                    "RefreshChannelItemAsync: channel {ChannelId} no longer surfaces item {ExternalId}; nothing to refresh",
+                    channelId,
+                    channelItemExternalId);
+                return;
+            }
+
+            if (options.ForceUpdate || options.ForceProbe)
+            {
+                await GetChannelItemEntityAsync(
+                    info,
+                    provider,
+                    channelId,
+                    channelEntity,
+                    forceUpdateParam: options.ForceUpdate,
+                    forceProbe: options.ForceProbe,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            if (options.InvalidateMediaInfoCache)
+            {
+                // GetChannelItemMediaSourcesInternal caches keyed on
+                // item.ExternalId. ExternalId equals the
+                // ChannelItemInfo.Id we have in hand.
+                _memoryCache.Remove(channelItemExternalId);
+            }
         }
 
         internal IChannel GetChannelProvider(Channel channel)
