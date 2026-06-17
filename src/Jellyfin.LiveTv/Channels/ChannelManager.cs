@@ -1026,6 +1026,23 @@ namespace Jellyfin.LiveTv.Channels
                 item.Tags = info.Tags.ToArray();
                 item.OriginalTitle = info.OriginalTitle;
             }
+            else if (forceUpdateParam)
+            {
+                item.Name = info.Name;
+                item.Genres = info.Genres.ToArray();
+                item.Studios = info.Studios.ToArray();
+                item.CommunityRating = info.CommunityRating;
+                item.Overview = info.Overview;
+                item.IndexNumber = info.IndexNumber;
+                item.ParentIndexNumber = info.ParentIndexNumber;
+                item.PremiereDate = info.PremiereDate;
+                item.ProductionYear = info.ProductionYear;
+                item.ProviderIds = info.ProviderIds;
+                item.OfficialRating = info.OfficialRating;
+                item.Tags = info.Tags.ToArray();
+                item.OriginalTitle = info.OriginalTitle;
+                forceUpdate = true;
+            }
             else if (info.Type == ChannelItemType.Folder && info.FolderType == ChannelFolderType.Container)
             {
                 // At least update names of container folders
