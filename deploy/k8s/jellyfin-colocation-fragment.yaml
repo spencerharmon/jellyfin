@@ -1,0 +1,98 @@
+# Reference fragment for the co-located gostream+jellyfin Pod — NOT a deployable manifest on its
+# own. See submodules/jellyfin/INFRASTRUCTURE.md (beehive repo) for the full mount + persistence
+# + blue/green-library contract this composes, and ./README.md for scope notes.
+#
+# Sibling of gostream's repo/deploy/k8s/pod-fuse-fragment.yaml (fuse-mount-propagation task) —
+# that fragment owns the shared `gostream-mkv-virtual` volume's own definition (hostPath vs
+# emptyDir) and gostream's Bidirectional/privileged mount of it. This fragment only adds
+# jellyfin's HostToContainer read-only mount of the SAME volume, plus jellyfin's own persistence.
+#
+# Independent per-color persistence: colors do NOT share a PVC pair (see the library decision in
+# INFRASTRUCTURE.md) — blue and green each index the same stable gostream inode map into their
+# own separate Jellyfin library DB.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-var-lib-blue
+  labels:
+    app.kubernetes.io/name: jellyfin
+    app.kubernetes.io/part-of: phantom-library
+    color: blue
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 20Gi # library DB + metadata + artwork cache + phantom-library plugin data; operator-tunable
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-etc-blue
+  labels:
+    app.kubernetes.io/name: jellyfin
+    app.kubernetes.io/part-of: phantom-library
+    color: blue
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 256Mi # /etc/jellyfin server config only
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-var-lib-green
+  labels:
+    app.kubernetes.io/name: jellyfin
+    app.kubernetes.io/part-of: phantom-library
+    color: green
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-etc-green
+  labels:
+    app.kubernetes.io/name: jellyfin
+    app.kubernetes.io/part-of: phantom-library
+    color: green
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 256Mi
+---
+# NOT standalone Kubernetes kinds — named excerpts to splice into the composed co-located Pod's
+# `spec.containers` / `spec.volumes` lists (flux's phantom-library-bluegreen-deploy). Pick the
+# `-blue` or `-green` claims above to match whichever color this Pod instance is.
+jellyfinContainerFragment:
+  name: jellyfin
+  image: "<jellyfin-image>" # placeholder — see jellyfin:container-image / ARTIFACTS.md for the real ref
+  ports:
+    - containerPort: 8096
+      name: http
+  volumeMounts:
+    - name: gostream-mkv-virtual # SAME volume gostream mounts Bidirectional; see gostream's fuse-mount-propagation fragment
+      mountPath: /mnt/gostream-mkv-virtual # identical path to gostream's in-container fuse_mount_path
+      readOnly: true
+      mountPropagation: HostToContainer
+    - name: jellyfin-var-lib
+      mountPath: /var/lib/jellyfin
+    - name: jellyfin-etc
+      mountPath: /etc/jellyfin
+jellyfinVolumesFragment:
+  - name: jellyfin-var-lib
+    persistentVolumeClaim:
+      claimName: jellyfin-var-lib-<color> # jellyfin-var-lib-blue | jellyfin-var-lib-green
+  - name: jellyfin-etc
+    persistentVolumeClaim:
+      claimName: jellyfin-etc-<color> # jellyfin-etc-blue | jellyfin-etc-green
