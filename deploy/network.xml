@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  CUTOVER-SAFE Jellyfin network configuration — REFERENCE contract artifact.
+
+  Task: bluegreen-dns-contract (ROI Priority 1). Sibling of container-image.
+  Consumed by: flux's phantom-library-bluegreen-deploy.
+
+  Deploy path: this file is the patched-Jellyfin image's network.xml. It is
+  either BAKED into the image at <configdir>/network.xml by container-image, or
+  MOUNTED there by flux. In this deployment <configdir> is /etc/jellyfin, so the
+  live path is /etc/jellyfin/network.xml. Jellyfin's CreateNetworkConfiguration
+  pre-startup migration only writes network.xml when it is ABSENT, so a
+  pre-placed file (bake/mount) wins and is read verbatim by the runtime
+  NetworkConfiguration store (StoreKey "network"; root element <NetworkConfiguration>).
+
+  WHY this file exists — the blue/green cutover contract:
+  The operator's true blue/green runs two color environments concurrently and
+  cuts over by flipping two role CNAMEs (jellyfin.polyfam.studio [prod] and
+  dev.jellyfin.polyfam.studio [dev]) between the blue./green.jellyfin.polyfam.studio
+  color ingresses. NO data-plane change happens on cutover. For that to be
+  transparent, the SAME image must serve every color/role host identically on
+  :8096 with NO per-color/role hostname pinned anywhere, and must advertise
+  whatever host the client actually used. The four settings marked [CUTOVER]
+  below are what make a CNAME flip need no restart/reconfig. See
+  submodules/jellyfin/INFRASTRUCTURE.md for the full contract.
+
+  KnownProxies note: forwarded headers are trusted ONLY from these peers. Value
+  below is the cluster-internal RFC1918 scope (traefik reaches :8096 only from
+  the in-cluster pod network; :8096 is a ClusterIP, not externally exposed).
+  flux MAY narrow this to the exact cluster pod CIDR for defense-in-depth — but
+  it MUST remain non-empty, or Jellyfin ignores X-Forwarded-* entirely and the
+  cutover contract breaks (see [CUTOVER] on EnablePublishedServerUriByRequest).
+-->
+<NetworkConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <!-- [CUTOVER] Served at web root on every color/role host. No per-host prefix. -->
+  <BaseUrl></BaseUrl>
+  <!-- TLS terminates at traefik (wildcard default-TLSStore SNI). Jellyfin serves plain HTTP. -->
+  <EnableHttps>false</EnableHttps>
+  <!-- Do NOT force HTTPS inside Jellyfin; the ingress owns the HTTPS redirect. -->
+  <RequireHttps>false</RequireHttps>
+  <CertificatePath></CertificatePath>
+  <CertificatePassword></CertificatePassword>
+  <!-- The serving contract: HTTP on :8096 (matches the operator's host contract + container-image). -->
+  <InternalHttpPort>8096</InternalHttpPort>
+  <InternalHttpsPort>8920</InternalHttpsPort>
+  <PublicHttpPort>8096</PublicHttpPort>
+  <PublicHttpsPort>8920</PublicHttpsPort>
+  <AutoDiscovery>true</AutoDiscovery>
+  <EnableUPnP>false</EnableUPnP>
+  <EnableIPv4>true</EnableIPv4>
+  <EnableIPv6>false</EnableIPv6>
+  <!-- Role/color hosts are "remote" (reached via traefik); remote access must stay on. -->
+  <EnableRemoteAccess>true</EnableRemoteAccess>
+  <LocalNetworkSubnets />
+  <LocalNetworkAddresses />
+  <!-- [CUTOVER] Trust X-Forwarded-For/Proto/Host from traefik. Empty here => Jellyfin sets
+       ForwardedHeaders=None and IGNORES all X-Forwarded-* (ApiServiceCollectionExtensions
+       .ConfigureForwardHeaders), which breaks request-derived published URI below. -->
+  <KnownProxies>
+    <string>10.0.0.0/8</string>
+    <string>172.16.0.0/12</string>
+    <string>192.168.0.0/16</string>
+  </KnownProxies>
+  <IgnoreVirtualInterfaces>true</IgnoreVirtualInterfaces>
+  <VirtualInterfaceNames>
+    <string>veth</string>
+  </VirtualInterfaceNames>
+  <!-- [CUTOVER] Advertise the URI derived from the incoming request's (forwarded) Host, so
+       Jellyfin follows the CNAME automatically: prod requests see jellyfin.polyfam.studio,
+       dev requests see dev.jellyfin.polyfam.studio, with no pinned per-color/role value. -->
+  <EnablePublishedServerUriByRequest>true</EnablePublishedServerUriByRequest>
+  <!-- [CUTOVER] EMPTY on purpose. Any entry here pins a fixed published URI per subnet, baking
+       a color/role host and defeating the CNAME flip. Leave empty. -->
+  <PublishedServerUriBySubnet />
+  <RemoteIPFilter />
+  <IsRemoteIPFilterBlacklist>false</IsRemoteIPFilterBlacklist>
+</NetworkConfiguration>
