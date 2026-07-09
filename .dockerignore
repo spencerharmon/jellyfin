@@ -9,3 +9,10 @@ deployment/*/dist
 deployment/*/pkg-dist
 deployment/collect-dist/
 ci/
+# Not referenced by the `dotnet publish Jellyfin.Server` graph — kept out of the build context.
+tests/
+fuzz/
+.github/
+.vscode/
+.devcontainer/
+deploy/k8s/
