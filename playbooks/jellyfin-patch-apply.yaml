@@ -1,0 +1,41 @@
+---
+# jellyfin-patch-apply — gate 1 of 3: prove the additive channel-refresh patch
+# applies IDEMPOTENTLY at base tag v10.11.9 and FAIL LOUD on any non-applying
+# hunk (never skip / special-case). All real logic lives in
+# tools/zuul-ci/patch-apply-verify.sh so a developer runs the exact same gate.
+#
+# Two plays on purpose:
+#   1. A localhost guard that ALWAYS runs and FAILS the job when the inventory
+#      has no build node. Without it, a `hosts: all` play against an empty
+#      inventory runs zero tasks and reports a SILENT GREEN — the false pass we
+#      refuse. flux has no Nodepool provider yet, so today this guard is what
+#      keeps the gate honestly red. See docs/ci-zuul.md.
+#   2. The real patch-apply verification, run ON the assigned build node.
+
+- name: Guard — refuse to pass on an empty inventory (no build node)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Fail honestly when there is no build node (no Nodepool yet)
+      ansible.builtin.fail:
+        msg: >-
+          No build node in the inventory (groups['all'] is empty). The jellyfin
+          patch-apply gate needs a real executor node with git to clone upstream
+          v10.11.9 and apply the patch, but the Zuul tenant has no Nodepool
+          provider yet, so no node was assigned. Refusing to report success on
+          zero hosts. This job goes green only once flux stands up a Nodepool
+          build-node provider and a nodeset is added to zuul.d/jobs.yaml.
+      when: groups['all'] | length == 0
+
+- name: Patch-apply idempotency + fail-loud verification
+  hosts: all
+  tasks:
+    - name: apply the additive patch at the base tag (idempotent, fail-loud)
+      ansible.builtin.shell:
+        cmd: exec ./tools/zuul-ci/patch-apply-verify.sh
+        chdir: "{{ ansible_user_dir }}/{{ zuul.project.src_dir }}"
+        executable: /bin/bash
+      environment:
+        JELLYFIN_UPSTREAM_REPO: "{{ jellyfin_upstream_repo | default('https://github.com/jellyfin/jellyfin.git') }}"
+        JELLYFIN_CI_BASE_TAG: "{{ jellyfin_base_tag | default('v10.11.9') }}"

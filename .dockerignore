@@ -16,3 +16,9 @@ fuzz/
 .vscode/
 .devcontainer/
 deploy/k8s/
+# Self-hosted Zuul CI config + local-repro tooling — not part of the image build.
+zuul.d/
+playbooks/
+tools/zuul-ci/
+.yamllint
+docs/ci-zuul.md

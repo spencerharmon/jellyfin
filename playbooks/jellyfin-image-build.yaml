@@ -1,0 +1,34 @@
+---
+# jellyfin-image-build — gate 3 of 3: build container-image's repo/Dockerfile on
+# every change, proving the deployable patched-Jellyfin image still builds. Build
+# only, NO push (publishing is the live release path — see docs/ci-zuul.md). All
+# real logic lives in tools/zuul-ci/image-build.sh.
+#
+# Honesty guard (see jellyfin-patch-apply.yaml): fail loudly on an empty
+# inventory so a missing build node is an honest red, never a play that matches
+# zero hosts and reports green without building the image.
+
+- name: Guard — refuse to pass on an empty inventory (no build node)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Fail honestly when there is no build node (no Nodepool yet)
+      ansible.builtin.fail:
+        msg: >-
+          No build node in the inventory (groups['all'] is empty). The jellyfin
+          image-build gate needs a real executor node with podman or docker to
+          build repo/Dockerfile, but the Zuul tenant has no Nodepool provider
+          yet, so no node was assigned. Refusing to report success on zero
+          hosts. This job goes green only once flux stands up a Nodepool
+          build-node provider and a nodeset is added to zuul.d/jobs.yaml.
+      when: groups['all'] | length == 0
+
+- name: Build the container image (no push)
+  hosts: all
+  tasks:
+    - name: build repo/Dockerfile for the node's native arch (no push)
+      ansible.builtin.shell:
+        cmd: exec ./tools/zuul-ci/image-build.sh
+        chdir: "{{ ansible_user_dir }}/{{ zuul.project.src_dir }}"
+        executable: /bin/bash

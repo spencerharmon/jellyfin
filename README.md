@@ -39,6 +39,13 @@
 
 ---
 
+> **Patched fork note.** This is an additive-patched Jellyfin fork (base `v10.11.9` +
+> the channel-refresh patch: `IChannelItemRefresh` / `IChannelItemRefreshManager`). Its
+> CI runs on the swarm's **self-hosted Zuul** (`zuul.d/`, `playbooks/`, `tools/zuul-ci/`) —
+> patch-apply idempotency, four-DLL surface verification, and the container-image build.
+> Upstream's GitHub Actions under `.github/workflows/` are left in place until the Zuul
+> gates are proven live. See [`docs/ci-zuul.md`](docs/ci-zuul.md).
+
 Jellyfin is a Free Software Media System that puts you in control of managing and streaming your media. It is an alternative to the proprietary Emby and Plex, to provide media from a dedicated server to end-user devices via multiple apps. Jellyfin is descended from Emby's 3.5.2 release and ported to the .NET platform to enable full cross-platform support. 
 
 There are no strings attached, no premium licenses or features, and no hidden agendas: just a team that wants to build something better and work together to achieve it. We welcome anyone who is interested in joining us in our quest!
