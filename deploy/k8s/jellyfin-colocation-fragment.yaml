@@ -76,10 +76,14 @@ spec:
 # `-blue` or `-green` claims above to match whichever color this Pod instance is.
 jellyfinContainerFragment:
   name: jellyfin
-  image: "<jellyfin-image>" # placeholder — see jellyfin:container-image / ARTIFACTS.md for the real ref
+  image: "ghcr.io/spencerharmon/jellyfin-phantom:10.11.9" # real ref from jellyfin:container-image — see ARTIFACTS.md (registry is the default-to-confirm)
   ports:
     - containerPort: 8096
       name: http
+  # PLUGIN INSTALL (see INFRASTRUCTURE.md "Container image contract"): the image installs the
+  # phantom-library plugin on start from ${JELLYFIN_PLUGIN_PRELOAD_DIR} (default
+  # /opt/jellyfin/plugins-preload). flux stages the phantom-library-built plugin DLL there via an
+  # init-container / sidecar writing a small shared volume, then mounts that volume here at that path.
   volumeMounts:
     - name: gostream-mkv-virtual # SAME volume gostream mounts Bidirectional; see gostream's fuse-mount-propagation fragment
       mountPath: /mnt/gostream-mkv-virtual # identical path to gostream's in-container fuse_mount_path
