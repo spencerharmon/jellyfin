@@ -1,0 +1,40 @@
+---
+# jellyfin-build-verify — gate 2 of 3: build the fork and assert the four named
+# DLLs exist and expose the REAL patch surfaces (IChannelItemRefresh,
+# IChannelItemRefreshManager, RefreshChannelItemAsync — NOT the nonexistent
+# IItemActionProvider/Actions; see tools/zuul-ci/build-verify.sh + ARTIFACTS.md).
+# All real logic lives in tools/zuul-ci/build-verify.sh.
+#
+# Honesty guard (see jellyfin-patch-apply.yaml): fail loudly on an empty
+# inventory so a missing build node is an honest red, never a play that matches
+# zero hosts and reports green without building.
+
+- name: Guard — refuse to pass on an empty inventory (no build node)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Fail honestly when there is no build node (no Nodepool yet)
+      ansible.builtin.fail:
+        msg: >-
+          No build node in the inventory (groups['all'] is empty). The jellyfin
+          build+surface gate needs a real executor node with the .NET 9 SDK to
+          `dotnet publish` the fork and grep the built DLLs, but the Zuul tenant
+          has no Nodepool provider yet, so no node was assigned. Refusing to
+          report success on zero hosts. This job goes green only once flux
+          stands up a Nodepool build-node provider and a nodeset is added to
+          zuul.d/jobs.yaml.
+      when: groups['all'] | length == 0
+
+- name: Build the fork + assert the four-DLL surfaces
+  hosts: all
+  tasks:
+    - name: dotnet publish + surface assertions (no reusable build servers)
+      ansible.builtin.shell:
+        cmd: exec ./tools/zuul-ci/build-verify.sh
+        chdir: "{{ ansible_user_dir }}/{{ zuul.project.src_dir }}"
+        executable: /bin/bash
+      environment:
+        MSBUILDDISABLENODEREUSE: "1"
+        DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+        DOTNET_NOLOGO: "1"

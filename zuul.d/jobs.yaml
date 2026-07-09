@@ -1,0 +1,84 @@
+---
+# jellyfin (patched fork) — Zuul job definitions, run on the swarm's self-hosted
+# Zuul (deployed into the cluster by the flux submodule's `zuul` task) — NOT
+# GitHub Actions. See docs/ci-zuul.md for the full rationale, the GitHub-Actions
+# -> Zuul migration, and the pending-Nodepool cross-dep.
+#
+# This fork is an UNTRUSTED project on that Zuul: it may only DEFINE jobs and
+# ATTACH them to pipelines flux already provides (check / gate); it must NEVER
+# define a `pipeline:` of its own. See zuul.d/project.yaml for the attachment,
+# modelled on the beehive submodule's release-verify wiring (the canonical shape)
+# and gostream's zuul-ci.
+#
+# HONEST NODEPOOL GATING (do not "fake green"):
+# All three jobs perform a REAL build/verify step and REQUIRE a Nodepool-provided
+# executor node:
+#   * jellyfin-patch-apply  needs a Linux node with git (clone upstream v10.11.9,
+#     apply + verify the additive patch).
+#   * jellyfin-build-verify needs a Linux node with the .NET 9 SDK (the fork pins
+#     .NET 9 via global.json; `dotnet publish` the fork + grep the built DLLs).
+#   * jellyfin-image-build   needs a Linux node with podman or docker (build
+#     repo/Dockerfile).
+# flux has NO Nodepool build-node provider deployed yet, so these jobs canNOT
+# execute today. Rather than stub them green, each playbook opens with a
+# localhost guard that FAILS the job when no build node was assigned
+# (playbooks/jellyfin-*.yaml) — a missing node yields an honest red, never a
+# silent green.
+#
+# `nodeset:` is deliberately OMITTED (each job inherits whatever nodeset the
+# tenant's base job eventually defines). Hardcoding a Nodepool label here would
+# be an unconfirmed guess — the concrete label ships with flux's Nodepool work.
+#
+# CROSS-DEP (recorded for the next reconcile): live execution of all three jobs
+# depends on flux's Nodepool provider task. The concrete `flux:<taskid>` is NOT
+# invented here — it does not exist yet; the next reconcile attaches it to this
+# task's PLAN.md deps once flux's Nodepool task id is known (the authorized
+# jellyfin <-> flux SUBMODULE-LINKS.yaml link permits that qualified cross-dep).
+
+- job:
+    name: jellyfin-patch-apply
+    description: |
+      Prove the additive channel-refresh patch applies IDEMPOTENTLY at base tag
+      v10.11.9 (e83a7e62f2) and FAIL LOUD on any non-applying hunk — never skip
+      or special-case one. Confirms the base SHA is an ancestor of HEAD and still
+      matches upstream's v10.11.9 tag, that the patch is file-level additive (3
+      new + 2 modified files, no deletions/renames), that it applies to a
+      pristine upstream base clone, that a second apply is a detected no-op
+      (idempotent), and that base + patch is byte-identical to the fork. Logic in
+      tools/zuul-ci/patch-apply-verify.sh.
+
+      Needs a Nodepool build node with git (none deployed yet — the playbook
+      fails honestly rather than skipping to green).
+    run: playbooks/jellyfin-patch-apply.yaml
+    timeout: 1800
+
+- job:
+    name: jellyfin-build-verify
+    description: |
+      Build the fork and assert the four named DLLs exist and expose the REAL
+      patch surfaces: MediaBrowser.Controller.dll (IChannelItemRefresh,
+      IChannelItemRefreshManager) and Jellyfin.LiveTv.dll (IChannelItemRefreshManager,
+      RefreshChannelItemAsync), plus stock MediaBrowser.Model.dll and
+      Jellyfin.Api.dll present. It does NOT assert the ROI-listed
+      IItemActionProvider / /Items/{itemId}/Actions surface, which
+      patch-contract-verify proved does not exist (ARTIFACTS.md discrepancy).
+      Logic in tools/zuul-ci/build-verify.sh.
+
+      Needs a Nodepool build node with the .NET 9 SDK (none deployed yet — the
+      playbook fails honestly rather than skipping to green).
+    run: playbooks/jellyfin-build-verify.yaml
+    timeout: 3600
+
+- job:
+    name: jellyfin-image-build
+    description: |
+      Build container-image's repo/Dockerfile (the deployable patched-Jellyfin
+      image) on every change, proving it still builds. Build only — no registry
+      push; publishing ghcr.io/spencerharmon/jellyfin-phantom:10.11.9 is the live
+      release path (credentials + a tag-triggered pipeline), out of scope here.
+      Logic in tools/zuul-ci/image-build.sh.
+
+      Needs a Nodepool build node with podman or docker (none deployed yet — the
+      playbook fails honestly rather than skipping to green).
+    run: playbooks/jellyfin-image-build.yaml
+    timeout: 3600
