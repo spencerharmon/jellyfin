@@ -1,0 +1,75 @@
+# Reference fragment for the CSI VolumeSnapshot-based snapshot -> restore provisioning cycle that
+# (re)populates the INACTIVE color's `/var/lib/jellyfin` PVC from the ACTIVE (prod) color's PVC --
+# NOT a deployable manifest on its own. See submodules/jellyfin/INFRASTRUCTURE.md (beehive repo,
+# "Snapshot -> restore provisioning contract" section) for the full sequence, the three-way
+# ownership split, and the accepted write-loss-window tradeoff this fragment mechanises.
+#
+# ADDITIVE sibling of ./jellyfin-colocation-fragment.yaml (task: colocation-persistence-contract) --
+# that fragment's four PVCs (independent per-color pairs) are left byte-for-byte UNCHANGED by this
+# file. This fragment only adds the snapshot + restore-PVC shapes that (re)provision ONE of them
+# (jellyfin-var-lib-<inactive-color>) from a point-in-time copy of the OTHER
+# (jellyfin-var-lib-<active-color>). `/etc/jellyfin` (server config) is explicitly OUT of this cycle
+# -- see INFRASTRUCTURE.md; jellyfin-etc-{blue,green} are never snapshotted or restored here.
+#
+# Placeholders used below (never asserted as real -- see submodules/jellyfin/ARTIFACTS.md
+# "Snapshot/restore CSI driver + flux cross-dep"):
+#   <active-color> / <inactive-color>  -- resolved at cycle-run time by whichever color is
+#                                         currently NOT serving jellyfin.polyfam.studio (prod) is
+#                                         <inactive-color>; substitute blue/green accordingly.
+#   TBD-flux-volumesnapshotclass       -- flux's Piraeus/LINSTOR VolumeSnapshotClass name; driver
+#                                         `linstor.csi.linbit.com` (flux ROI P2). flux has not
+#                                         landed a task for it yet -- see ARTIFACTS.md cross-dep.
+#   TBD-flux-linstor-storageclass      -- the restore PVC's StorageClass. The existing
+#                                         `jellyfin-var-lib-*` PVCs are `storageClassName: local-path`
+#                                         (jellyfin-colocation-fragment.yaml), which CANNOT be a
+#                                         VolumeSnapshot source -- the restored PVC needs a
+#                                         Piraeus/LINSTOR-backed class instead, also flux's to mint.
+#
+# Lifecycle note (not a manifest kind): step 1 of the sequence -- deleting a prior cycle's stale
+# non-prod test VolumeSnapshot/restored PVC before re-running steps 2-4 below -- is imperative
+# cleanup (`kubectl delete`), left as an operational step rather than declared here.
+
+# Step 2: snapshot the ACTIVE (prod) color's library PVC (never the inactive one -- the point is a
+# true prod-derived clone for staging to validate against).
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: jellyfin-var-lib-<active-color>-snapshot
+  labels:
+    app.kubernetes.io/name: jellyfin
+    app.kubernetes.io/part-of: phantom-library
+spec:
+  volumeSnapshotClassName: TBD-flux-volumesnapshotclass # flux mints; driver linstor.csi.linbit.com -- see ARTIFACTS.md
+  source:
+    persistentVolumeClaimName: jellyfin-var-lib-<active-color> # from jellyfin-colocation-fragment.yaml, unchanged
+---
+# Step 3: restore that snapshot into a new PVC for the INACTIVE color, REPLACING its previous
+# independent (empty-provisioned) jellyfin-var-lib-<inactive-color> PVC from
+# jellyfin-colocation-fragment.yaml. Same claim name as the original -- jellyfinVolumesFragment's
+# existing `claimName: jellyfin-var-lib-<color>` reference there needs no other edit once this PVC
+# is (re)created under that name.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-var-lib-<inactive-color>
+  labels:
+    app.kubernetes.io/name: jellyfin
+    app.kubernetes.io/part-of: phantom-library
+    color: <inactive-color>
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: TBD-flux-linstor-storageclass # local-path (the original PVC's class) cannot be a snapshot source -- see ARTIFACTS.md
+  dataSource:
+    kind: VolumeSnapshot
+    name: jellyfin-var-lib-<active-color>-snapshot
+    apiGroup: snapshot.storage.k8s.io
+  resources:
+    requests:
+      storage: 20Gi # matches jellyfin-var-lib-*'s existing size in jellyfin-colocation-fragment.yaml
+
+# Step 4 (not a manifest): point the inactive color's Pod at the restored PVC above. No change
+# needed to jellyfinContainerFragment/jellyfinVolumesFragment in jellyfin-colocation-fragment.yaml --
+# they already reference `claimName: jellyfin-var-lib-<color>`, which now resolves to the restored
+# volume for whichever color is inactive. Ordinary Pod/Deployment reconciliation once the PVC above
+# is Bound completes this step; no code-level change beyond what colocation-persistence-contract
+# already wires.
