@@ -66,12 +66,19 @@ def read(path: str) -> str:
         return fh.read()
 
 
-# Expected job -> (run playbook, gate script) wiring.
+# Expected job -> (run playbook, gate script) wiring. Each of these OWNS its run playbook.
 JOBS_EXPECTED = {
     "jellyfin-patch-apply": ("playbooks/jellyfin-patch-apply.yaml", "tools/zuul-ci/patch-apply-verify.sh"),
     "jellyfin-build-verify": ("playbooks/jellyfin-build-verify.yaml", "tools/zuul-ci/build-verify.sh"),
     "jellyfin-image-build": ("playbooks/jellyfin-image-build.yaml", "tools/zuul-ci/image-build.sh"),
 }
+
+# Jobs that INHERIT their run playbook + nodeset from a parent job defined in a different
+# repo/config-project (spencerharmon/zuul-config's `build-and-publish-image`) — task
+# zuul-image-build-publish, 2026-07-21. These are still expected to be attached to a pipeline
+# (checked below), but have no local run: playbook or script to verify here, and DO have a real
+# Nodepool nodeset via the parent (the whole point — it builds AND publishes).
+JOBS_INHERITED = {"jellyfin-image-build-publish"}
 
 
 def main() -> int:
@@ -105,10 +112,16 @@ def main() -> int:
                 job = item["job"]
                 jobs[job["name"]] = job
     check(bool(jobs), f"at least one job defined ({len(jobs)} found)")
-    for name in JOBS_EXPECTED:
+    for name in list(JOBS_EXPECTED) + list(JOBS_INHERITED):
         check(name in jobs, f"expected job defined: {name}")
 
     for name, job in jobs.items():
+        if name in JOBS_INHERITED:
+            check(
+                "parent" in job and job["parent"] != "base",
+                f"job '{name}' inherits run/nodeset from a non-base parent ({job.get('parent')!r})",
+            )
+            continue
         check("run" in job, f"job '{name}' has a run: playbook")
         ref = job.get("run")
         refs = (ref if isinstance(ref, list) else [ref]) if ref else []
@@ -117,7 +130,7 @@ def main() -> int:
                 os.path.isfile(os.path.join(REPO_ROOT, r)),
                 f"job '{name}' run playbook exists: {r}",
             )
-        # No Nodepool yet: a hardcoded nodeset would fake a node contract.
+        # No Nodepool yet for these three: a hardcoded nodeset would fake a node contract.
         check(
             "nodeset" not in job,
             f"job '{name}' declares no nodeset (no Nodepool yet — honest red)",
@@ -135,23 +148,26 @@ def main() -> int:
     if project is not None:
         check("name" not in project, "project omits name: (defaults to this repo)")
         attached: set[str] = set()
-        allowed = {"check", "gate"}
+        # PIPELINE REALITY UPDATE (task zuul-image-build-publish, 2026-07-21): check/gate were
+        # deleted tenant-wide by flux's Gitea-only migration (ROI reconcile d09b7e14e1); confirmed
+        # live against the deployed scheduler, which now defines exactly one pipeline, `post`.
+        allowed = {"post"}
         pipelines = {k for k in project if k not in ("templates", "vars", "queue")}
         for pl in pipelines:
             check(
                 pl in allowed,
-                f"project attaches only to check/gate (found pipeline key '{pl}')",
+                f"project attaches only to {'/'.join(sorted(allowed))} (found pipeline key '{pl}')",
             )
             spec = project.get(pl) or {}
             for j in (spec.get("jobs") or []):
                 jn = j if isinstance(j, str) else next(iter(j))
                 attached.add(jn)
-        for pl in ("check", "gate"):
+        for pl in allowed:
             spec = project.get(pl) or {}
             check(bool(spec.get("jobs")), f"project attaches at least one job to {pl}")
         for jn in attached:
             check(jn in jobs, f"attached job '{jn}' is defined in zuul.d/jobs.yaml")
-        for name in JOBS_EXPECTED:
+        for name in list(JOBS_EXPECTED) + list(JOBS_INHERITED):
             check(name in attached, f"job attached to a pipeline: {name}")
 
     # No project may define a pipeline of its own (untrusted).

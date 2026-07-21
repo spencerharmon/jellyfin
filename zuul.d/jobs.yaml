@@ -2,38 +2,60 @@
 # jellyfin (patched fork) — Zuul job definitions, run on the swarm's self-hosted
 # Zuul (deployed into the cluster by the flux submodule's `zuul` task) — NOT
 # GitHub Actions. See docs/ci-zuul.md for the full rationale, the GitHub-Actions
-# -> Zuul migration, and the pending-Nodepool cross-dep.
+# -> Zuul migration.
 #
 # This fork is an UNTRUSTED project on that Zuul: it may only DEFINE jobs and
-# ATTACH them to pipelines flux already provides (check / gate); it must NEVER
-# define a `pipeline:` of its own. See zuul.d/project.yaml for the attachment,
-# modelled on the beehive submodule's release-verify wiring (the canonical shape)
-# and gostream's zuul-ci.
+# ATTACH them to pipelines the `spencerharmon/zuul-config` config-project
+# defines; it must NEVER define a `pipeline:` of its own. See zuul.d/project.yaml
+# for the attachment.
+#
+# PIPELINE REALITY UPDATE (task zuul-image-build-publish, 2026-07-21): the
+# check/gate pipeline pair this file originally targeted (modelled on an older
+# assumed shape) was deleted outright by flux's Gitea-only migration (ROI
+# reconcile d09b7e14e1, flux commit cc8c47b "Zuul goes Gitea-only") — confirmed
+# live against the deployed tenant (`GET /api/tenant/beehive/...`); the
+# scheduler's own `zuul-tenant-config` ConfigMap and `spencerharmon/zuul-config`
+# now define exactly ONE pipeline, `post` (the git driver has only
+# `ref-updated`, no PR/change events, no reporter). Attaching a job to a
+# nonexistent pipeline is a HARD tenant-config-load error that would break
+# every project in the tenant (flux, helm-charts, beehive, zuul-config itself),
+# not just jellyfin — so all four jobs below attach to `post` only
+# (zuul.d/project.yaml). A future native Gitea-driver upgrade may reintroduce
+# check/gate; re-split these jobs onto it then.
 #
 # HONEST NODEPOOL GATING (do not "fake green"):
-# All three jobs perform a REAL build/verify step and REQUIRE a Nodepool-provided
+# All four jobs perform a REAL build/verify step and REQUIRE a Nodepool-provided
 # executor node:
 #   * jellyfin-patch-apply  needs a Linux node with git (clone upstream v10.11.9,
 #     apply + verify the additive patch).
 #   * jellyfin-build-verify needs a Linux node with the .NET 9 SDK (the fork pins
 #     .NET 9 via global.json; `dotnet publish` the fork + grep the built DLLs).
 #   * jellyfin-image-build   needs a Linux node with podman or docker (build
-#     repo/Dockerfile).
-# flux has NO Nodepool build-node provider deployed yet, so these jobs canNOT
-# execute today. Rather than stub them green, each playbook opens with a
-# localhost guard that FAILS the job when no build node was assigned
-# (playbooks/jellyfin-*.yaml) — a missing node yields an honest red, never a
-# silent green.
+#     repo/Dockerfile, no push — proves the Dockerfile still builds).
+#   * jellyfin-image-build-publish BUILDS AND PUBLISHES: inherits the
+#     `build-and-publish-image` base job (spencerharmon/zuul-config), which runs
+#     on the `buildah-pod` nodeset — the static Nodepool provider flux stood up
+#     (docs/tasks/zuul-nodepool-provider.md). It pushes
+#     git.spencerharmon.com/zuul/jellyfin-phantom:<tag> to the in-cluster Gitea
+#     OCI registry (never `:latest`; the base job's playbook return-values the
+#     registry-served digest).
+# jellyfin-patch-apply and jellyfin-build-verify still omit `nodeset:` (no
+# concrete label pinned for them yet — see docs/ci-zuul.md); each playbook opens
+# with a localhost guard that FAILS the job when no build node was assigned, so
+# a missing node yields an honest red, never a silent green.
 #
-# `nodeset:` is deliberately OMITTED (each job inherits whatever nodeset the
-# tenant's base job eventually defines). Hardcoding a Nodepool label here would
-# be an unconfirmed guess — the concrete label ships with flux's Nodepool work.
-#
-# CROSS-DEP (recorded for the next reconcile): live execution of all three jobs
-# depends on flux's Nodepool provider task. The concrete `flux:<taskid>` is NOT
-# invented here — it does not exist yet; the next reconcile attaches it to this
-# task's PLAN.md deps once flux's Nodepool task id is known (the authorized
-# jellyfin <-> flux SUBMODULE-LINKS.yaml link permits that qualified cross-dep).
+# PREREQUISITE NOT YET MET (cross-dep, do not fabricate an id): none of these
+# four jobs actually RUN until `spencerharmon/jellyfin` is added to the
+# tenant's `untrusted-projects` list in flux's GitOps-tracked
+# `infrastructure/zuul/tenant-config.yaml` (currently lists only
+# spencerharmon/flux, spencerharmon/helm-charts, spencerharmon/beehive) and the
+# `zuul-tenant-config` ConfigMap is reconciled + the scheduler picks up the new
+# tenant layout. That edit belongs to flux's own tracked source (its
+# Kustomization-managed ConfigMap), not to this submodule's worktree — flux's
+# tracked PLAN.md has not yet landed a task id for it at this reconcile, so the
+# real `flux:<taskid>` dep is a documented note for the next reconcile to
+# attach (mirrors `zuul-ci`'s original Nodepool note), never a fabricated peer
+# id or local sentinel.
 
 - job:
     name: jellyfin-patch-apply
@@ -74,11 +96,35 @@
     description: |
       Build container-image's repo/Dockerfile (the deployable patched-Jellyfin
       image) on every change, proving it still builds. Build only — no registry
-      push; publishing ghcr.io/spencerharmon/jellyfin-phantom:10.11.9 is the live
-      release path (credentials + a tag-triggered pipeline), out of scope here.
+      push; publishing is jellyfin-image-build-publish's job, below.
       Logic in tools/zuul-ci/image-build.sh.
 
       Needs a Nodepool build node with podman or docker (none deployed yet — the
       playbook fails honestly rather than skipping to green).
     run: playbooks/jellyfin-image-build.yaml
+    timeout: 3600
+
+- job:
+    name: jellyfin-image-build-publish
+    parent: build-and-publish-image
+    description: |
+      BUILD + PUBLISH the deployable patched-Jellyfin image (task
+      zuul-image-build-publish, ROI Priority 3, keystone-inherited weight=8):
+      buildah-builds repo/Dockerfile on the Nodepool `buildah-pod` node and
+      pushes the registry-served digest to
+      git.spencerharmon.com/zuul/jellyfin-phantom:<tag> (never `:latest`).
+      flux's phantom-library blue/green deploy consumes exactly this ref (flux
+      ROI P3 complete-path step 2) — this job IS the supply; there is no
+      upstream image and none should ever be assumed. Inherits
+      `build-and-publish-image` (spencerharmon/zuul-config); see
+      docs/runbooks/build-image-in-gitea.md (flux submodule) for the shared
+      recipe this follows.
+
+      image_tag defaults to the short newrev (build-and-publish-image's
+      default); override with a semantic tag only if one is required
+      (still never ':latest').
+    vars:
+      image_name: jellyfin-phantom
+      image_context: .
+      containerfile: Dockerfile
     timeout: 3600

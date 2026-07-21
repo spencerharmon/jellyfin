@@ -1,30 +1,45 @@
 ---
 # jellyfin (patched fork) — Zuul project-pipeline attachment.
 #
-# UNTRUSTED project: attach jobs ONLY to pipelines flux's Zuul config-project
-# already defines (check / gate). Do NOT declare a `pipeline:` here, and do NOT
-# set `name:` — it defaults to this repository, which is what we want. This is
-# the same shape the beehive submodule's release-verify wiring and gostream's
-# zuul-ci use.
+# UNTRUSTED project: attach jobs ONLY to pipelines the `spencerharmon/zuul-config`
+# config-project defines. Do NOT declare a `pipeline:` here, and do NOT set
+# `name:` — it defaults to this repository, which is what we want.
 #
-# All three jobs are honestly gated on flux's not-yet-deployed Nodepool provider
-# (see zuul.d/jobs.yaml): with no build node they fail red rather than faking
-# green. They are attached to BOTH check and gate so the honest-red (or, once a
-# Nodepool exists, real-green) signal blocks a broken change from merging.
+# PIPELINE REALITY UPDATE (task zuul-image-build-publish, 2026-07-21): this
+# used to attach to `check`/`gate`, modelled on an older assumed shape. Those
+# pipelines were deleted outright by flux's Gitea-only migration (ROI reconcile
+# d09b7e14e1) — confirmed live against the deployed tenant
+# (`GET /api/tenant/beehive/...` lists exactly one pipeline, `post`; the git
+# driver has only `ref-updated`, no PR/change events, no reporter). Attaching a
+# job to a nonexistent pipeline is a HARD tenant-config-load error that breaks
+# every project in the tenant, not just this one — so all four jobs attach to
+# `post` only. A future native Gitea-driver upgrade may reintroduce check/gate;
+# re-split these jobs onto it then.
 #
-# Cross-repo prerequisite (NOT this repo's change): for these jobs to load and
-# run in the deployed tenant, flux must register spencerharmon/jellyfin under
-# `untrusted-projects` in infrastructure/zuul/tenant-config.yaml. Tracked via the
-# authorized jellyfin <-> flux submodule link; see docs/ci-zuul.md.
+# jellyfin-patch-apply/jellyfin-build-verify/jellyfin-image-build are honestly
+# gated on their own missing Nodepool node (no nodeset assigned yet — see
+# zuul.d/jobs.yaml): with no build node they fail red rather than faking green.
+# jellyfin-image-build-publish DOES have a real Nodepool node (inherits
+# build-and-publish-image's buildah-pod nodeset) and both builds AND publishes
+# git.spencerharmon.com/zuul/jellyfin-phantom:<tag> to the in-cluster Gitea OCI
+# registry on every push to this project's tracked branch.
+#
+# Cross-repo prerequisite (NOT this repo's change, do not fabricate a dep id):
+# for these jobs to actually RUN in the deployed tenant, flux must register
+# spencerharmon/jellyfin under `untrusted-projects` in its GitOps-tracked
+# `infrastructure/zuul/tenant-config.yaml` (currently lists only
+# spencerharmon/flux, spencerharmon/helm-charts, spencerharmon/beehive) and the
+# `zuul-tenant-config` ConfigMap must reconcile. flux's tracked PLAN.md has not
+# yet landed a task id for this at this reconcile, so the real `flux:<taskid>`
+# dep is a documented note for the next reconcile to attach (mirrors
+# `zuul-ci`'s original Nodepool cross-dep note) — never a fabricated peer id or
+# local sentinel. See docs/ci-zuul.md and
+# submodules/jellyfin/ARTIFACTS.md ("Zuul image build/publish").
 
 - project:
-    check:
+    post:
       jobs:
         - jellyfin-patch-apply
         - jellyfin-build-verify
         - jellyfin-image-build
-    gate:
-      jobs:
-        - jellyfin-patch-apply
-        - jellyfin-build-verify
-        - jellyfin-image-build
+        - jellyfin-image-build-publish
