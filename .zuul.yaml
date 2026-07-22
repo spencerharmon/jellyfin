@@ -1,0 +1,116 @@
+---
+# jellyfin (patched fork) — Zuul job definitions + project-pipeline attachment.
+#
+# This fork is registered on the swarm's self-hosted Zuul (deployed by the flux
+# submodule) as a GitHub-source UNTRUSTED project (tenant-config.yaml's `github:`
+# source, `include-branches: [phantom-library/patch-base-10.11.9]` — this branch).
+# The `github` connection is the poll-based, anonymous, read-only `git` driver
+# (NOT the webhook GitHub App connection zuul-github-removal deleted) — it exposes
+# only `ref-updated` polling (no PR/change events, no reporter), so this project
+# runs `post`-style jobs only. See docs/ci-zuul.md for the full rationale.
+#
+# UNTRUSTED project constraint: this file may only DEFINE jobs and ATTACH them to
+# a pipeline the tenant's config-project (spencerharmon/zuul-config) already
+# provides (`post` — `check`/`gate` were deleted tenant-wide, see
+# zuul-config's zuul.d/pipelines.yaml). It must NEVER define a `pipeline:` of its
+# own, and must NOT set `name:` on the project stanza (defaults to this repo).
+#
+# CONVERTED from zuul.d/{jobs,project}.yaml to a single root .zuul.yaml
+# (zuul-image-build-publish task) to match the tenant's own doc comment and
+# gostream's identical, already-landed shape (`.zuul.yaml`, not `zuul.d/`).
+#
+# HONEST NODEPOOL GATING (do not "fake green"):
+# `jellyfin-patch-apply` / `jellyfin-build-verify` / `jellyfin-image-build-check`
+# each open with a localhost guard that FAILS the job when no build node was
+# assigned (playbooks/jellyfin-*.yaml) — a missing/unsuitable node yields an
+# honest red, never a silent green. flux's Nodepool provider now exists but
+# serves exactly ONE static label (`pod-buildah`, buildah-only — no git/.NET
+# SDK), so these three jobs still have no suitable node and stay honestly red
+# until a general-purpose build node is added; only the new `jellyfin-image-build`
+# job below (which needs only buildah) can actually run today.
+#
+# `jellyfin-image-build`: the REAL build+publish job. It inherits
+# `build-and-publish-image` (flux's reusable base job, spencerharmon/zuul-config's
+# jobs.yaml), which already carries `nodeset: buildah-pod` and
+# `run: playbooks/build-and-publish-image.yaml` — this project only supplies the
+# per-image `vars:` (image_name/context/containerfile). Publishes to the in-cluster
+# Gitea OCI registry as `git.spencerharmon.com/zuul/jellyfin-phantom:<tag>`
+# (registry-served digest — never `:latest`). This is the pullable artifact
+# flux's P1 blue/green deploy consumes, superseding the never-pullable
+# `ghcr.io/spencerharmon/jellyfin-phantom:10.11.9` ref.
+
+- job:
+    name: jellyfin-patch-apply
+    description: |
+      Prove the additive channel-refresh patch applies IDEMPOTENTLY at base tag
+      v10.11.9 (e83a7e62f2) and FAIL LOUD on any non-applying hunk — never skip
+      or special-case one. Confirms the base SHA is an ancestor of HEAD and still
+      matches upstream's v10.11.9 tag, that the patch is file-level additive (3
+      new + 2 modified files, no deletions/renames), that it applies to a
+      pristine upstream base clone, that a second apply is a detected no-op
+      (idempotent), and that base + patch is byte-identical to the fork. Logic in
+      tools/zuul-ci/patch-apply-verify.sh.
+
+      Needs a Nodepool build node with git. flux's Nodepool provider serves only
+      the buildah-only `pod-buildah` label today, so this stays honestly red
+      until a general-purpose node is added.
+    run: playbooks/jellyfin-patch-apply.yaml
+    timeout: 1800
+
+- job:
+    name: jellyfin-build-verify
+    description: |
+      Build the fork and assert the four named DLLs exist and expose the REAL
+      patch surfaces: MediaBrowser.Controller.dll (IChannelItemRefresh,
+      IChannelItemRefreshManager) and Jellyfin.LiveTv.dll (IChannelItemRefreshManager,
+      RefreshChannelItemAsync), plus stock MediaBrowser.Model.dll and
+      Jellyfin.Api.dll present. It does NOT assert the ROI-listed
+      IItemActionProvider / /Items/{itemId}/Actions surface, which
+      patch-contract-verify proved does not exist (ARTIFACTS.md discrepancy).
+      Logic in tools/zuul-ci/build-verify.sh.
+
+      Needs a Nodepool build node with the .NET 9 SDK. flux's Nodepool provider
+      serves only the buildah-only `pod-buildah` label today, so this stays
+      honestly red until a general-purpose node is added.
+    run: playbooks/jellyfin-build-verify.yaml
+    timeout: 3600
+
+- job:
+    name: jellyfin-image-build-check
+    description: |
+      Build container-image's Dockerfile (the deployable patched-Jellyfin
+      image) on every change, proving it still builds. Build only — no registry
+      push; publishing is `jellyfin-image-build` below (inherits
+      `build-and-publish-image`). Logic in tools/zuul-ci/image-build.sh.
+
+      Needs a Nodepool build node with podman or docker. flux's Nodepool provider
+      serves only the buildah-only `pod-buildah` label today; that label's node
+      does have a build tool (buildah) but this check-only job is not yet wired
+      to it (see jellyfin-image-build below for the real build+publish path that
+      IS wired), so this stays honestly red pending a general-purpose node.
+    run: playbooks/jellyfin-image-build.yaml
+    timeout: 3600
+
+- job:
+    name: jellyfin-image-build
+    parent: build-and-publish-image
+    description: |
+      REAL build + publish: inherits flux's `build-and-publish-image` base job
+      (spencerharmon/zuul-config, runs on the `buildah-pod` Nodepool node) to
+      buildah-build this repo's Dockerfile and push it to the in-cluster Gitea
+      OCI registry as `git.spencerharmon.com/zuul/jellyfin-phantom:<tag>`
+      (registry-served digest, never `:latest`). This is the pullable artifact
+      flux's P1 blue/green deploy consumes — see ARTIFACTS.md /
+      INFRASTRUCTURE.md for the canonical ref and the superseded `ghcr.io` ref.
+    vars:
+      image_name: jellyfin-phantom
+      image_context: "."
+      containerfile: Dockerfile
+
+- project:
+    post:
+      jobs:
+        - jellyfin-patch-apply
+        - jellyfin-build-verify
+        - jellyfin-image-build-check
+        - jellyfin-image-build

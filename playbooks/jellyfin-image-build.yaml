@@ -1,27 +1,33 @@
 ---
-# jellyfin-image-build — gate 3 of 3: build container-image's repo/Dockerfile on
-# every change, proving the deployable patched-Jellyfin image still builds. Build
-# only, NO push (publishing is the live release path — see docs/ci-zuul.md). All
-# real logic lives in tools/zuul-ci/image-build.sh.
+# jellyfin-image-build-check — build-only check for this repo's Dockerfile,
+# proving the deployable patched-Jellyfin image still builds. Build only, NO
+# push (publishing is `jellyfin-image-build`, .zuul.yaml, which inherits
+# flux's `build-and-publish-image` base job — see docs/ci-zuul.md). All real
+# logic lives in tools/zuul-ci/image-build.sh.
 #
 # Honesty guard (see jellyfin-patch-apply.yaml): fail loudly on an empty
-# inventory so a missing build node is an honest red, never a play that matches
-# zero hosts and reports green without building the image.
+# inventory so a missing/unsuitable build node is an honest red, never a play
+# that matches zero hosts and reports green without building the image. flux's
+# Nodepool provider now exists but serves only the buildah-only `pod-buildah`
+# label — this job has no nodeset of its own, so it stays honestly red until a
+# general-purpose node is added.
 
 - name: Guard — refuse to pass on an empty inventory (no build node)
   hosts: localhost
   connection: local
   gather_facts: false
   tasks:
-    - name: Fail honestly when there is no build node (no Nodepool yet)
+    - name: Fail honestly when there is no build node (no suitable Nodepool label)
       ansible.builtin.fail:
         msg: >-
-          No build node in the inventory (groups['all'] is empty). The jellyfin
-          image-build gate needs a real executor node with podman or docker to
-          build repo/Dockerfile, but the Zuul tenant has no Nodepool provider
-          yet, so no node was assigned. Refusing to report success on zero
-          hosts. This job goes green only once flux stands up a Nodepool
-          build-node provider and a nodeset is added to zuul.d/jobs.yaml.
+          No build node in the inventory (groups['all'] is empty). The
+          jellyfin-image-build-check gate needs a real executor node with
+          podman or docker to build the Dockerfile, but this job declares no
+          nodeset (flux's Nodepool provider serves only the buildah-only
+          `pod-buildah` label, not a general-purpose node), so no node was
+          assigned. Refusing to report success on zero hosts. This job goes
+          green once a general-purpose build node is added, or is retired in
+          favor of the real `jellyfin-image-build` build+publish job.
       when: groups['all'] | length == 0
 
 - name: Build the container image (no push)

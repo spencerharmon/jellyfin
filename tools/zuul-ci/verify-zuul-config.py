@@ -2,17 +2,22 @@
 """Regression check for the patched-Jellyfin fork's Zuul CI config.
 
 Toolchain-agnostic: needs only python3 + PyYAML — no .NET, no upstream clone, no
-Zuul executor. It is the in-repo guard that keeps zuul.d/ + playbooks/ +
+Zuul executor. It is the in-repo guard that keeps .zuul.yaml + playbooks/ +
 tools/zuul-ci/ from silently rotting, and doubles as the local "reproduce now" lint +
 dry run required by the zuul-ci task.
 
 What it enforces (see docs/ci-zuul.md for rationale):
-  * every zuul.d/*.yaml and playbooks/*.yaml parses as YAML;
-  * the project attaches jobs to `check` and `gate` ONLY, declares no
+  * .zuul.yaml and every playbooks/*.yaml parses as YAML;
+  * the project attaches jobs to `post` ONLY (check/gate were deleted
+    tenant-wide, see zuul-config's zuul.d/pipelines.yaml), declares no
     `pipeline:` and no `name:` (untrusted-project rules);
-  * every job attached to a pipeline is defined, declares a run: playbook that
-    exists, and declares NO nodeset (no Nodepool yet -> honest red);
-  * each playbook has the honest empty-inventory guard and invokes its script;
+  * every job attached to a pipeline is defined; a job with no `parent:` (or a
+    `parent` other than a flux base job) declares a run: playbook that exists
+    and NO nodeset of its own (no general-purpose Nodepool node yet -> honest
+    red); `jellyfin-image-build` (parent: build-and-publish-image) is exempt —
+    it inherits its run: playbook + nodeset from flux's base job;
+  * each of the three non-inheriting playbooks has the honest empty-inventory
+    guard and invokes its script;
   * the three gate scripts exist, are executable, pass `bash -n`, and encode
     their contracts (idempotent fail-loud apply; the four DLLs + REAL surfaces,
     NOT the nonexistent IItemActionProvider; Dockerfile build with no push);
@@ -28,7 +33,7 @@ import subprocess
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ZUUL_D = os.path.join(REPO_ROOT, "zuul.d")
+ZUUL_YAML = os.path.join(REPO_ROOT, ".zuul.yaml")
 PLAYBOOKS = os.path.join(REPO_ROOT, "playbooks")
 TOOLS_CI = os.path.join(REPO_ROOT, "tools", "zuul-ci")
 
@@ -66,28 +71,30 @@ def read(path: str) -> str:
         return fh.read()
 
 
-# Expected job -> (run playbook, gate script) wiring.
+# Expected job -> (run playbook, gate script) wiring. jellyfin-image-build
+# inherits its run:/nodeset from parent build-and-publish-image, so it is
+# handled separately (INHERITED_JOBS below), not in this dict.
 JOBS_EXPECTED = {
     "jellyfin-patch-apply": ("playbooks/jellyfin-patch-apply.yaml", "tools/zuul-ci/patch-apply-verify.sh"),
     "jellyfin-build-verify": ("playbooks/jellyfin-build-verify.yaml", "tools/zuul-ci/build-verify.sh"),
-    "jellyfin-image-build": ("playbooks/jellyfin-image-build.yaml", "tools/zuul-ci/image-build.sh"),
+    "jellyfin-image-build-check": ("playbooks/jellyfin-image-build.yaml", "tools/zuul-ci/image-build.sh"),
 }
+# Jobs that inherit run:/nodeset from a parent job defined elsewhere (flux's
+# zuul-config config-project) — this repo supplies only vars:, never a run:
+# playbook or nodeset of its own.
+INHERITED_JOBS = {"jellyfin-image-build": "build-and-publish-image"}
 
 
 def main() -> int:
     print("== files present ==")
-    jobs_yaml = os.path.join(ZUUL_D, "jobs.yaml")
-    project_yaml = os.path.join(ZUUL_D, "project.yaml")
-    for p in (jobs_yaml, project_yaml):
-        check(os.path.isfile(p), f"exists: {os.path.relpath(p, REPO_ROOT)}")
+    check(os.path.isfile(ZUUL_YAML), f"exists: {os.path.relpath(ZUUL_YAML, REPO_ROOT)}")
 
     print("\n== yaml parses ==")
-    yaml_files = []
-    for d in (ZUUL_D, PLAYBOOKS):
-        if os.path.isdir(d):
-            for name in sorted(os.listdir(d)):
-                if name.endswith((".yaml", ".yml")):
-                    yaml_files.append(os.path.join(d, name))
+    yaml_files = [ZUUL_YAML] if os.path.isfile(ZUUL_YAML) else []
+    if os.path.isdir(PLAYBOOKS):
+        for name in sorted(os.listdir(PLAYBOOKS)):
+            if name.endswith((".yaml", ".yml")):
+                yaml_files.append(os.path.join(PLAYBOOKS, name))
     for p in yaml_files:
         rel = os.path.relpath(p, REPO_ROOT)
         try:
@@ -99,16 +106,30 @@ def main() -> int:
     # --- job definitions -----------------------------------------------------
     print("\n== job definitions ==")
     jobs: dict[str, dict] = {}
-    if os.path.isfile(jobs_yaml):
-        for item in load_yaml(jobs_yaml) or []:
+    if os.path.isfile(ZUUL_YAML):
+        for item in load_yaml(ZUUL_YAML) or []:
             if isinstance(item, dict) and "job" in item:
                 job = item["job"]
                 jobs[job["name"]] = job
     check(bool(jobs), f"at least one job defined ({len(jobs)} found)")
-    for name in JOBS_EXPECTED:
+    for name in list(JOBS_EXPECTED) + list(INHERITED_JOBS):
         check(name in jobs, f"expected job defined: {name}")
 
     for name, job in jobs.items():
+        if name in INHERITED_JOBS:
+            check(
+                job.get("parent") == INHERITED_JOBS[name],
+                f"job '{name}' inherits parent: {INHERITED_JOBS[name]}",
+            )
+            check(
+                "run" not in job,
+                f"job '{name}' declares no run: of its own (inherits from parent)",
+            )
+            check(
+                "nodeset" not in job,
+                f"job '{name}' declares no nodeset of its own (inherits buildah-pod from parent)",
+            )
+            continue
         check("run" in job, f"job '{name}' has a run: playbook")
         ref = job.get("run")
         refs = (ref if isinstance(ref, list) else [ref]) if ref else []
@@ -117,47 +138,47 @@ def main() -> int:
                 os.path.isfile(os.path.join(REPO_ROOT, r)),
                 f"job '{name}' run playbook exists: {r}",
             )
-        # No Nodepool yet: a hardcoded nodeset would fake a node contract.
+        # No general-purpose Nodepool node yet: a hardcoded nodeset would fake a node contract.
         check(
             "nodeset" not in job,
-            f"job '{name}' declares no nodeset (no Nodepool yet — honest red)",
+            f"job '{name}' declares no nodeset (no general-purpose Nodepool node yet — honest red)",
         )
 
     # --- project / pipeline attachment --------------------------------------
     print("\n== project attachment (untrusted-project rules) ==")
     project = None
-    if os.path.isfile(project_yaml):
-        for item in load_yaml(project_yaml) or []:
+    if os.path.isfile(ZUUL_YAML):
+        for item in load_yaml(ZUUL_YAML) or []:
             if isinstance(item, dict) and "project" in item:
                 project = item["project"]
-    check(project is not None, "project.yaml defines a project stanza")
+    check(project is not None, "zuul.yaml defines a project stanza")
 
     if project is not None:
         check("name" not in project, "project omits name: (defaults to this repo)")
         attached: set[str] = set()
-        allowed = {"check", "gate"}
+        allowed = {"post"}
         pipelines = {k for k in project if k not in ("templates", "vars", "queue")}
         for pl in pipelines:
             check(
                 pl in allowed,
-                f"project attaches only to check/gate (found pipeline key '{pl}')",
+                f"project attaches only to post (found pipeline key '{pl}')",
             )
             spec = project.get(pl) or {}
             for j in (spec.get("jobs") or []):
                 jn = j if isinstance(j, str) else next(iter(j))
                 attached.add(jn)
-        for pl in ("check", "gate"):
+        for pl in ("post",):
             spec = project.get(pl) or {}
             check(bool(spec.get("jobs")), f"project attaches at least one job to {pl}")
         for jn in attached:
-            check(jn in jobs, f"attached job '{jn}' is defined in zuul.d/jobs.yaml")
-        for name in JOBS_EXPECTED:
+            check(jn in jobs, f"attached job '{jn}' is defined in .zuul.yaml")
+        for name in list(JOBS_EXPECTED) + list(INHERITED_JOBS):
             check(name in attached, f"job attached to a pipeline: {name}")
 
     # No project may define a pipeline of its own (untrusted).
     print("\n== no pipeline definitions (untrusted-project rule) ==")
     for p in yaml_files:
-        if os.path.dirname(p) != ZUUL_D:
+        if p != ZUUL_YAML:
             continue
         for item in load_yaml(p) or []:
             if isinstance(item, dict):

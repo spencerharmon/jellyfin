@@ -7,20 +7,27 @@ GitHub-Actions → Zuul migration, and the cross-repo work still pending.
 
 ## What runs
 
-In-repo Zuul config lives at `zuul.d/` + `playbooks/`, with the real logic in `tools/zuul-ci/`
-so a developer runs the exact same gates locally:
+In-repo Zuul config lives at the root `.zuul.yaml` + `playbooks/`, with the real logic in
+`tools/zuul-ci/` so a developer runs the exact same gates locally. (Converted from
+`zuul.d/{jobs,project}.yaml` to a single `.zuul.yaml` by `zuul-image-build-publish`,
+2026-07-22 — matches the tenant's own comment and gostream's identical, already-landed shape.)
 
-| Job | Playbook | Script | What it proves |
-|-----|----------|--------|----------------|
+| Job | Playbook / parent | Script | What it proves |
+|-----|--------------------|--------|----------------|
 | `jellyfin-patch-apply` | `playbooks/jellyfin-patch-apply.yaml` | `tools/zuul-ci/patch-apply-verify.sh` | the additive channel-refresh patch applies **idempotently** at base tag `v10.11.9` and **fails loud** on any non-applying hunk |
 | `jellyfin-build-verify` | `playbooks/jellyfin-build-verify.yaml` | `tools/zuul-ci/build-verify.sh` | the fork builds and the four named DLLs expose the **real** patch surfaces |
-| `jellyfin-image-build` | `playbooks/jellyfin-image-build.yaml` | `tools/zuul-ci/image-build.sh` | `Dockerfile` (the deployable image) still builds (no push) |
+| `jellyfin-image-build-check` | `playbooks/jellyfin-image-build.yaml` | `tools/zuul-ci/image-build.sh` | `Dockerfile` (the deployable image) still builds (no push) |
+| `jellyfin-image-build` | `parent: build-and-publish-image` (flux base job) | (inherited) | **builds AND publishes** the image to `git.spencerharmon.com/zuul/jellyfin-phantom:<tag>` (registry-served digest) |
 
-All three are attached to flux's existing **`check`** and **`gate`** pipelines in
-`zuul.d/project.yaml`. This fork is an **untrusted project** on that Zuul, so the config
-only *attaches* jobs to pipelines flux already defines — it never declares a `pipeline:`
-of its own and never sets `name:` (it defaults to this repo). This mirrors the beehive
-submodule's `release-verify` wiring (the canonical shape) and gostream's `zuul-ci`.
+All four are attached to the tenant's **`post`** pipeline in the `project:` stanza of
+`.zuul.yaml`. `check`/`gate` were **deleted tenant-wide** (ROI reconcile "Zuul goes
+Gitea-only" / the GitHub-source follow-up) — the `git`-driver GitHub connection this
+project loads from (`ref-updated` polling only, no PR/change events, no reporter) can only
+ever drive `post`-style jobs anyway. This fork is an **untrusted project** on that Zuul, so
+the config only *attaches* jobs to a pipeline flux's config-project already defines — it
+never declares a `pipeline:` of its own and never sets `name:` (it defaults to this repo).
+This mirrors the beehive submodule's `release-verify` wiring and gostream's identical,
+already-landed `.zuul.yaml`.
 
 ### `jellyfin-patch-apply` — idempotent, fail-loud
 
@@ -66,41 +73,54 @@ grep the surfaces `patch-contract-verify` actually built and verified:
 > contract, so this gate asserts the two interfaces that are **real** and leaves the
 > discrepancy for operator/reconcile disposition.
 
-### `jellyfin-image-build` — build only
+### `jellyfin-image-build-check` — build only
 
-Builds `repo/Dockerfile` (`ghcr.io/spencerharmon/jellyfin-phantom:10.11.9`'s recipe)
-with podman or docker to prove it still builds. It does **not** push — publishing to a
-registry is the live release path (registry credentials + a tag-triggered pipeline) and
-is out of scope for check/gate, mirroring gostream's `gostream-image-build`.
+Builds `Dockerfile` (`git.spencerharmon.com/zuul/jellyfin-phantom`'s recipe) with podman
+or docker to prove it still builds, with no push. The real publish is the separate
+`jellyfin-image-build` job below (mirrors gostream's `gostream-image-build-check` /
+`gostream-image-build` split).
 
-## Honest gating — no faked green (pending Nodepool)
+### `jellyfin-image-build` — REAL build + publish
 
-flux hosts Zuul but has **no Nodepool build-node provider deployed yet**. All three jobs
-perform a **real** build/verify step and need an executor node (git; the .NET 9 SDK;
-podman/docker). Rather than stub them green while no node exists, each playbook opens
-with a **localhost guard** that FAILS the job when the inventory has no build node —
-a missing node yields an **honest red**, never a play that matches zero hosts and
-silently reports success.
+`parent: build-and-publish-image` — flux's reusable base job (`spencerharmon/zuul-config`
+gitea config-project's seeded `jobs.yaml`), which runs on the Nodepool `buildah-pod`
+static node (label `pod-buildah`), buildah-logs into the Gitea OCI registry from the
+k8s Secret `gitea-registry-push` (ns `zuul`), builds this repo's `Dockerfile`, pushes
+`git.spencerharmon.com/zuul/jellyfin-phantom:<tag>`, and returns the registry-served
+digest as a Zuul job return value. This project supplies only
+`vars: {image_name: jellyfin-phantom, image_context: ., containerfile: Dockerfile}` — no
+`run:` playbook or `nodeset:` of its own (both inherited). See
+`submodules/jellyfin/ARTIFACTS.md`'s "Image build + publish pipeline" section for the full
+pipeline detail, verification command, and live-effect status.
 
-`nodeset:` is deliberately **omitted** from every job (each inherits whatever nodeset the
-tenant's base job eventually defines). Hardcoding a Nodepool label now would be an
-unconfirmed guess; the concrete label ships with flux's Nodepool work.
+## Honest gating — no faked green
 
-**Cross-dep (for the next reconcile):** live execution of these jobs depends on flux's
-Nodepool provider task. The concrete `flux:<taskid>` is **not invented here** — it does
-not exist yet. The next reconcile attaches it to this task's `PLAN.md` deps once flux's
-Nodepool task id is known (the authorized jellyfin ↔ flux `SUBMODULE-LINKS.yaml` link
-permits that qualified cross-submodule dep). This mirrors gostream's `zuul-ci` +
-phantom-library's Nodepool-sentinel pattern.
+`jellyfin-patch-apply` / `jellyfin-build-verify` / `jellyfin-image-build-check` each open
+with a **localhost guard** that FAILS the job when the inventory has no build node — a
+missing/unsuitable node yields an **honest red**, never a play that matches zero hosts and
+silently reports success. flux's Nodepool provider now exists (`nodepool-launcher` +
+`zuul-build-node`), but it serves only the buildah-only `pod-buildah` label — no
+general-purpose node with git or the .NET 9 SDK — so these three jobs stay honestly red
+until such a node is added. `jellyfin-image-build` needs only buildah, so it (uniquely)
+CAN run for real today via the `buildah-pod` node it inherits from
+`build-and-publish-image`.
 
-## Cross-repo prerequisite (flux side, NOT this repo)
+`nodeset:` is deliberately **omitted** from the three non-inheriting jobs (each would
+otherwise have to guess at a general-purpose label that does not exist yet). Hardcoding
+one now would be an unconfirmed guess.
 
-For these jobs to load and run in the deployed tenant, **flux** must register
-`spencerharmon/jellyfin` under `untrusted-projects` in
-`infrastructure/zuul/tenant-config.yaml` (the github-origin projects beehive and gostream
-are already registered there and attach to check/gate — jellyfin follows the same
-pattern). Tracked via the authorized jellyfin ↔ flux submodule link. Until then the
-config is inert on the tenant but fully lints/reproduces locally (below).
+## Cross-repo prerequisite (flux side) — RESOLVED 2026-07-22
+
+`spencerharmon/jellyfin` is now registered as a **GitHub-source untrusted-project** in the
+live tenant (`tenant-config.yaml`'s `github:` source, `include-branches:
+[phantom-library/patch-base-10.11.9]`), and flux's `build-and-publish-image` base job +
+`gitea-registry-push` credential Secret both exist. Confirmed live via
+`GET https://zuul.spencerharmon.com/api/tenant/beehive/projects` after forcing
+`kubectl -n zuul exec deploy/zuul-scheduler -- zuul-scheduler full-reconfigure` (the
+mounted `zuul-tenant-config` ConfigMap had already changed, but the running scheduler was
+still serving a stale ZooKeeper-cached system config — a plain pod restart alone did not
+pick it up; the online `full-reconfigure` command did). This was the ACTIVE-convergence
+remediation this task's card called for, performed in-pass.
 
 ## GitHub Actions → Zuul migration
 
@@ -109,9 +129,10 @@ Upstream Jellyfin's workflows under `.github/workflows/` (notably `ci-tests.yml`
 `ci-codeql-analysis.yml`) are **left in place**. They test generic upstream behaviour;
 the Zuul jobs here add the **fork-specific** contract upstream CI does not know about:
 the additive patch applies idempotently at the base, the four patched DLLs expose the
-real surfaces, and the deployable image builds. Per the task, GHA is **not** deleted in a
-big-bang — cut over (prune the now-redundant workflows) as a **follow-up** once Zuul is
-proven live with a real Nodepool node, not before.
+real surfaces, and the deployable image builds+publishes. Per the task, GHA is **not**
+deleted in a big-bang — cut over (prune the now-redundant workflows) as a **follow-up**
+once a general-purpose Nodepool node makes `jellyfin-patch-apply`/`jellyfin-build-verify`
+real, not before.
 
 ## Reproduce locally
 
@@ -121,12 +142,12 @@ The toolchain-agnostic regression check needs only `python3` + PyYAML:
 python3 tools/zuul-ci/verify-zuul-config.py
 ```
 
-It parses all `zuul.d/`/`playbooks/` YAML, enforces the untrusted-project rules (check/gate
-only, no `pipeline:`, no `name:`, no `nodeset:`), enforces each script's contract, runs
-`bash -n` on the scripts, and runs each gate script in **dry-run** mode
-(`JELLYFIN_CI_DRYRUN=1`) — which for `patch-apply-verify.sh` really applies the patch to a
-locally-materialized base and checks idempotency + byte-identity (only the upstream-tag
-network check and the heavy .NET/image builds are skipped).
+It parses `.zuul.yaml`/`playbooks/` YAML, enforces the untrusted-project rules (`post`
+only, no `pipeline:`, no `name:`, no `nodeset:` on the three non-inheriting jobs), enforces
+each script's contract, runs `bash -n` on the scripts, and runs each gate script in
+**dry-run** mode (`JELLYFIN_CI_DRYRUN=1`) — which for `patch-apply-verify.sh` really
+applies the patch to a locally-materialized base and checks idempotency + byte-identity
+(only the upstream-tag network check and the heavy .NET/image builds are skipped).
 
 Run an individual gate in dry-run:
 
@@ -139,8 +160,11 @@ JELLYFIN_CI_DRYRUN=1 tools/zuul-ci/image-build.sh
 If `yamllint` is available (it is not required and may be absent locally):
 
 ```
-yamllint -c .yamllint zuul.d playbooks
+yamllint -c .yamllint .zuul.yaml playbooks
 ```
 
 On a real build node (with git / the .NET 9 SDK / podman) drop `JELLYFIN_CI_DRYRUN` to run
-the full gates — exactly what Zuul does once a Nodepool node is assigned.
+the full `jellyfin-patch-apply`/`jellyfin-build-verify`/`jellyfin-image-build-check` gates
+for real — exactly what Zuul does once a general-purpose Nodepool node is assigned.
+`jellyfin-image-build` (the real build+publish job) already runs today on the existing
+`buildah-pod` node.
