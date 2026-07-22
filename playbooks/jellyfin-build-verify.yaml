@@ -14,16 +14,16 @@
   connection: local
   gather_facts: false
   tasks:
-    - name: Fail honestly when there is no build node (no Nodepool yet)
+    - name: Fail honestly when there is no build node (no suitable Nodepool label)
       ansible.builtin.fail:
         msg: >-
           No build node in the inventory (groups['all'] is empty). The jellyfin
           build+surface gate needs a real executor node with the .NET 9 SDK to
-          `dotnet publish` the fork and grep the built DLLs, but the Zuul tenant
-          has no Nodepool provider yet, so no node was assigned. Refusing to
-          report success on zero hosts. This job goes green only once flux
-          stands up a Nodepool build-node provider and a nodeset is added to
-          zuul.d/jobs.yaml.
+          `dotnet publish` the fork and grep the built DLLs, but this job
+          declares no nodeset (flux's Nodepool provider serves only the
+          buildah-only `pod-buildah` label, not a .NET-capable node), so no
+          node was assigned. Refusing to report success on zero hosts. This
+          job goes green once a general-purpose build node is added.
       when: groups['all'] | length == 0
 
 - name: Build the fork + assert the four-DLL surfaces
