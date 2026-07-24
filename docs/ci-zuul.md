@@ -168,3 +168,38 @@ the full `jellyfin-patch-apply`/`jellyfin-build-verify`/`jellyfin-image-build-ch
 for real — exactly what Zuul does once a general-purpose Nodepool node is assigned.
 `jellyfin-image-build` (the real build+publish job) already runs today on the existing
 `buildah-pod` node.
+
+## Poll-driver retrigger — why `jellyfin-image-build` never fired (2026-07-24)
+
+`jellyfin-image-build` is a `post`-pipeline job on the **poll-based `git`-driver** GitHub
+connection (`ref-updated` on ref deltas only — no PR/change events, no reporter, no
+enqueue REST/webclient). That driver fires `ref-updated` **only for a ref value it observes
+*change* after the scheduler started watching**. The commit that merged the correct
+`.zuul.yaml` (and the whole `zuul-image-build-publish` config) landed on the tracked branch
+`phantom-library/patch-base-10.11.9` **before** the current scheduler began polling (or
+before its first `full-reconfigure` loaded the project), so that sha was already in the
+driver's baseline and the job **never enqueued once** — confirmed 2026-07-24 by flux's
+`phantom-library-bluegreen-repin-gitea-images`:
+
+- `GET /api/tenant/beehive/builds?job_name=jellyfin-image-build` → `[]` (never ran).
+- `git.spencerharmon.com/v2/zuul/jellyfin-phantom/tags/list` → HTTP 404 (no package), while
+  the sibling `.../v2/zuul/gostream/tags/list` → `{"tags":["da6ee69f8b79"]}` (the base job /
+  Nodepool / registry-push plumbing all genuinely work).
+
+Manual re-enqueue is **not** available on this deployment: `zuul enqueue-ref` needs a
+`[webclient]` section (absent) and the `/api/tenant/beehive/project/<p>/enqueue` REST
+endpoint 404s with no admin authenticator configured. A scheduler **restart does not help
+either** — it re-baselines the poller to the *current* tip, so the already-present sha still
+never registers as a delta.
+
+The one reliable trigger is therefore a **genuinely new ref value on the tracked branch**.
+This commit is that new ref: when it merges to `phantom-library/patch-base-10.11.9`, the
+`git`-driver observes the branch tip change and fires `ref-updated`, enqueuing the `post`
+pipeline and running `jellyfin-image-build` for the first time. The `.zuul.yaml` job
+definition is **unchanged** (it was already correct — 91/91 `verify-zuul-config.py`); only a
+new ref delta was needed.
+
+Post-merge confirmation of the published, pullable image (ref + `Docker-Content-Digest`) is
+carried by this task's `Verify-After-Merge:` check and recorded in
+`submodules/jellyfin/ARTIFACTS.md` / `INFRASTRUCTURE.md` once Zuul converges — the build
+cannot exist during the implementing session because it is gated on this very merge.
