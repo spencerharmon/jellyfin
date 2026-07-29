@@ -112,6 +112,25 @@ ENV LANGUAGE=en_US:en
 COPY --from=server-builder /jellyfin /jellyfin
 COPY --from=web-builder /dist "${JELLYFIN_WEB_DIR}"
 
+# Phantom Library web-UI shims (kebab menu + source picker, and item badges).
+# Jellyfin 10.11.x BrandingOptions only exposes CustomCss (no CustomJs), and the
+# SPA wraps CustomCss in a <style> tag, so a CSS-injected <script> never executes.
+# phantom-library's install.sh works around this on a distro install by patching
+# jellyfin-web/index.html directly; this image builds a STOCK jellyfin-web, so we
+# replicate that exact injection here (baked, so it survives PVC mounts and pod
+# restarts). The two shims are served (no-auth) by the plugin's own controllers at
+# /Plugins/PhantomLibrary/kebab.js and /Plugins/PhantomLibrary/badges.js. Sentinel
+# comments keep the injection idempotent + greppable; verified non-empty post-edit.
+RUN set -eux; \
+    idx="${JELLYFIN_WEB_DIR}/index.html"; \
+    test -f "$idx"; \
+    grep -q 'phantom-library-kebab' "$idx" \
+      || sed -i 's|</body>|<!--phantom-library-kebab--><script src="/Plugins/PhantomLibrary/kebab.js" defer></script></body>|' "$idx"; \
+    grep -q 'phantom-library-badges' "$idx" \
+      || sed -i 's|</body>|<!--phantom-library-badges--><script src="/Plugins/PhantomLibrary/badges.js" defer></script></body>|' "$idx"; \
+    grep -q 'phantom-library-kebab' "$idx"; \
+    grep -q 'phantom-library-badges' "$idx"
+
 # Cutover-safe network.xml (bluegreen-dns-contract) as the seed default + entrypoint.
 COPY deploy/network.xml /usr/share/jellyfin/config-defaults/network.xml
 COPY deploy/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
