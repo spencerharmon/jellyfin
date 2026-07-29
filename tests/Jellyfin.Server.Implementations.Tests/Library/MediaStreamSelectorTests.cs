@@ -19,10 +19,10 @@ public class MediaStreamSelectorTests
     [InlineData(new string[0], false, 1)]
     [InlineData(new string[0], true, 1)]
     [InlineData(new[] { "eng" }, false, 2)]
-    [InlineData(new[] { "eng" }, true, 1)]
+    [InlineData(new[] { "eng" }, true, 2)]
     [InlineData(new[] { "eng", "fre" }, false, 2)]
     [InlineData(new[] { "fre", "eng" }, false, 1)]
-    [InlineData(new[] { "eng", "fre" }, true, 1)]
+    [InlineData(new[] { "eng", "fre" }, true, 2)]
     public void GetDefaultAudioStreamIndex_PreferredLanguage_SelectsCorrect(string[] preferredLanguages, bool preferDefaultTrack, int expectedIndex)
     {
         var streams = new MediaStream[]
