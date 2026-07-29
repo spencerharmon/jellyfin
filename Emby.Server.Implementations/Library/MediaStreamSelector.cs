@@ -15,6 +15,16 @@ namespace Emby.Server.Implementations.Library
         {
             var sortedStreams = GetSortedStreams(streams, MediaStreamType.Audio, preferredLanguages).ToList();
 
+            if (preferredLanguages.Count > 0)
+            {
+                var preferredStream = sortedStreams.FirstOrDefault(i => MatchesPreferredLanguage(i.Language, preferredLanguages));
+
+                if (preferredStream is not null)
+                {
+                    return preferredStream.Index;
+                }
+            }
+
             if (preferDefaultTrack)
             {
                 var defaultStream = sortedStreams.FirstOrDefault(i => i.IsDefault);

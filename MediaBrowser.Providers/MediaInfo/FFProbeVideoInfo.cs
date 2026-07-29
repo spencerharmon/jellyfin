@@ -214,7 +214,11 @@ namespace MediaBrowser.Providers.MediaInfo
 
                 mediaAttachments = mediaInfo.MediaAttachments;
                 video.TotalBitrate = mediaInfo.Bitrate;
-                video.RunTimeTicks = mediaInfo.RunTimeTicks;
+                // Channel providers can supply authoritative runtime metadata
+                // before probing. Preserve it so short placeholder/test files
+                // or bad container duration probes do not break resume math.
+                var channelRuntimeTicks = video.SourceType == SourceType.Channel ? video.RunTimeTicks : null;
+                video.RunTimeTicks = channelRuntimeTicks is > 0 ? channelRuntimeTicks : mediaInfo.RunTimeTicks;
                 video.Container = mediaInfo.Container;
                 var videoType = video.VideoType;
                 if (videoType == VideoType.BluRay || videoType == VideoType.Dvd)
