@@ -4,9 +4,11 @@
 #
 # WHAT THIS BUILDS
 #   A deployable image of the ADDITIVE-patched Jellyfin fork:
-#     * base Jellyfin v10.11.9 (base SHA e83a7e62f2), and
-#     * the additive channel-refresh patch that already lives as committed history on this
-#       fork's tracked branch `phantom-library/patch-base-10.11.9` (tip 07de15dcd7).
+#     * base Jellyfin v10.11.11 (base SHA 1fbd873929, bumped from v10.11.9/e83a7e62f2 by task
+#       `base-bump-execute`, ROI Priority 4 — enabling floor for jellyfin-plugin-mysql), and
+#     * the additive channel-refresh + item-action patch series, rebased onto v10.11.11 as
+#       committed history on this fork's tracked branch (tip `c29757148f`, re-rooted from the
+#       prior `e83a7e62f2..07de15dcd7` range onto the new base tag).
 #   Because the patch is already committed on the branch this Dockerfile builds from, there is
 #   NO `git apply`/`git am` step here (verified by `jellyfin:patch-contract-verify`, recorded in
 #   submodules/jellyfin/ARTIFACTS.md). The four named build DLLs — MediaBrowser.Controller.dll,
@@ -25,11 +27,11 @@
 #   See deploy/docker-entrypoint.sh.
 #
 # BUILD (amd64):
-#   podman build -t ghcr.io/spencerharmon/jellyfin-phantom:10.11.9 -f Dockerfile .
+#   podman build -t ghcr.io/spencerharmon/jellyfin-phantom:10.11.11 -f Dockerfile .
 #   (or `docker build ...`; build context = this fork's repo root)
 
 ARG DOTNET_VERSION=9.0
-ARG JELLYFIN_WEB_VERSION=v10.11.9
+ARG JELLYFIN_WEB_VERSION=v10.11.11
 
 ########################################
 # Stage 1 — build the web client (pinned to the matching server release)
