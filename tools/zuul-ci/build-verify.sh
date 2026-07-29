@@ -8,18 +8,21 @@
 # REAL SURFACES (verified by jellyfin:patch-contract-verify via an actual
 # `dotnet build -c Release` + binary grep, recorded in
 # submodules/jellyfin/ARTIFACTS.md "Surface check"):
-#   MediaBrowser.Controller.dll : IChannelItemRefresh, IChannelItemRefreshManager
+#   MediaBrowser.Controller.dll : IChannelItemRefresh, IChannelItemRefreshManager, IItemActionProvider
 #   Jellyfin.LiveTv.dll         : IChannelItemRefreshManager, RefreshChannelItemAsync
-#   MediaBrowser.Model.dll      : (stock in this patch — asserted PRESENT only)
-#   Jellyfin.Api.dll            : (stock in this patch — asserted PRESENT only)
+#   MediaBrowser.Model.dll      : ItemActionInfo, ItemActionRequest, ItemActionResult
+#   Jellyfin.Api.dll            : ItemActionsController (the /Items/{itemId}/Actions endpoint)
 #
-# DELIBERATELY NOT ASSERTED: `IItemActionProvider` / `/Items/{itemId}/Actions`.
-# ROI.md/PLAN.md and docs/tasks/zuul-ci.md list those as patch surface, but
-# patch-contract-verify proved by exhaustive diff + build + binary grep that
-# they do NOT exist anywhere in the fork (a documentation error carried into the
-# ROI, see ARTIFACTS.md "Discrepancy"). Asserting a surface that does not exist
-# would fake a contract; this gate asserts the two interfaces that are REAL and
-# leaves the discrepancy for operator/reconcile disposition.
+# ITEM-ACTION SURFACE RESTORED (2026-07): `IItemActionProvider`, the ItemAction*
+# DTOs, and the `/Items/{itemId}/Actions` controller were listed in ROI.md/PLAN.md
+# as patch surface but had been LOST when the base-bump to 10.11.9 diverged from
+# the operator's original patched tree (they lived only as uncommitted files in the
+# operator's local jellyfin checkout, never carried onto this branch). An earlier
+# patch-contract-verify pass mis-classified the absence as a "documentation error."
+# It was NOT: the shipped phantom-library plugin 0.3.0.0 links against these types
+# and fails to load without them (TypeLoadException, plugin disabled). The five
+# additive source files are now restored on this branch and this gate asserts them
+# as REAL surface again — see ARTIFACTS.md "Discrepancy".
 #
 # Knobs (env):
 #   JELLYFIN_CI_DRYRUN=1   toolchain-agnostic dry run: do NOT build (the fork
@@ -46,10 +49,10 @@ DOTNET_FLAGS=(--configuration Release -p:UseSharedCompilation=false)
 # The four named build DLLs and the REAL surfaces each must expose. Format:
 #   <dll>|<symbol>[,<symbol>...]   ("-" = existence only, no surface grep)
 DLL_SURFACES=(
-    "MediaBrowser.Controller.dll|IChannelItemRefresh,IChannelItemRefreshManager"
+    "MediaBrowser.Controller.dll|IChannelItemRefresh,IChannelItemRefreshManager,IItemActionProvider"
     "Jellyfin.LiveTv.dll|IChannelItemRefreshManager,RefreshChannelItemAsync"
-    "MediaBrowser.Model.dll|-"
-    "Jellyfin.Api.dll|-"
+    "MediaBrowser.Model.dll|ItemActionInfo,ItemActionRequest,ItemActionResult"
+    "Jellyfin.Api.dll|ItemActionsController"
 )
 
 log()  { printf '\n=== %s\n' "$*"; }
