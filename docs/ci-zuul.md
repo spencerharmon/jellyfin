@@ -61,17 +61,20 @@ regardless of how far the tip has advanced. The gate then:
 `dotnet publish Jellyfin.Server -c Release` then assert the four named DLLs exist and
 grep the surfaces `patch-contract-verify` actually built and verified:
 
-- `MediaBrowser.Controller.dll` → `IChannelItemRefresh`, `IChannelItemRefreshManager`
+- `MediaBrowser.Controller.dll` → `IChannelItemRefresh`, `IChannelItemRefreshManager`, `IItemActionProvider`
 - `Jellyfin.LiveTv.dll` → `IChannelItemRefreshManager`, `RefreshChannelItemAsync`
-- `MediaBrowser.Model.dll`, `Jellyfin.Api.dll` → present (stock in this patch)
+- `MediaBrowser.Model.dll` → `ItemActionInfo`, `ItemActionRequest`, `ItemActionResult`
+- `Jellyfin.Api.dll` → `ItemActionsController` (the `/Items/{itemId}/Actions` endpoint)
 
-> **Not asserted: `IItemActionProvider` / `/Items/{itemId}/Actions`.** `ROI.md`,
-> `PLAN.md`, and this task's design doc list those as patch surface, but
-> `patch-contract-verify` proved by exhaustive diff + build + binary grep that they do
-> **not exist anywhere** in the fork — a documentation error carried into the ROI (see
-> `ARTIFACTS.md` "Discrepancy"). Asserting a surface that does not exist would fake a
-> contract, so this gate asserts the two interfaces that are **real** and leaves the
-> discrepancy for operator/reconcile disposition.
+> **Item-action surface RESTORED (2026-07).** `IItemActionProvider`, the `ItemAction*`
+> DTOs, and the `/Items/{itemId}/Actions` controller are patch surface after all. They
+> had been LOST in the 10.11.9 base-bump (they existed only as uncommitted files in the
+> operator's local jellyfin checkout, never carried onto this branch), and an earlier
+> `patch-contract-verify` pass mis-classified the absence as a documentation error. It
+> was not: the shipped `phantom-library` plugin `0.3.0.0` links these types and fails to
+> load without them (`TypeLoadException` → plugin disabled → no channels). The five
+> additive source files are restored on this branch and this gate now asserts them (see
+> `ARTIFACTS.md` "Discrepancy").
 
 ### `jellyfin-image-build-check` — build only
 

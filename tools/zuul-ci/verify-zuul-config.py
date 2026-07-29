@@ -20,7 +20,7 @@ What it enforces (see docs/ci-zuul.md for rationale):
     guard and invokes its script;
   * the three gate scripts exist, are executable, pass `bash -n`, and encode
     their contracts (idempotent fail-loud apply; the four DLLs + REAL surfaces,
-    NOT the nonexistent IItemActionProvider; Dockerfile build with no push);
+    plus the restored IItemActionProvider/ItemAction* surface; Dockerfile build with no push);
   * each script runs clean end-to-end in dry-run mode (exercising control flow +
     the honest checks without a toolchain / network).
 
@@ -243,9 +243,11 @@ def main() -> int:
             check(dll in b, f"build asserts DLL present: {dll}")
         for sym in ("IChannelItemRefresh", "IChannelItemRefreshManager", "RefreshChannelItemAsync"):
             check(sym in b, f"build asserts REAL surface: {sym}")
+        for sym in ("IItemActionProvider", "ItemActionInfo", "ItemActionRequest", "ItemActionResult", "ItemActionsController"):
+            check(sym in b, f"build asserts RESTORED item-action surface: {sym}")
         check(
-            "DELIBERATELY NOT ASSERTED" in b and "IItemActionProvider" in b,
-            "build documents why IItemActionProvider is NOT asserted (does not exist)",
+            "ITEM-ACTION SURFACE RESTORED" in b,
+            "build documents that the item-action surface was restored (plugin 0.3.0.0 needs it)",
         )
         check("grep -aq" in b, "build greps the built DLLs for the surfaces")
 
