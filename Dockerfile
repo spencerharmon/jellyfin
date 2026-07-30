@@ -32,6 +32,15 @@ ARG DOTNET_VERSION=9.0
 ARG JELLYFIN_WEB_VERSION=v10.11.9
 
 ########################################
+# Stage 0 — gostream binary (single-container consolidation).
+# k8s cannot share a mount namespace between containers, so a FUSE mounted by a
+# separate gostream container is invisible (content-wise) to Jellyfin. We instead
+# co-locate gostream IN this image and run both processes in one mount namespace
+# (the host's original layout). Pinned by immutable digest; bump deliberately.
+########################################
+FROM git.spencerharmon.com/zuul/gostream@sha256:8fbd795c03f8f11d465e68e62fd39921fd810827993c83f6bdf5c478f3af6031 AS gostream-bin
+
+########################################
 # Stage 1 — build the web client (pinned to the matching server release)
 ########################################
 FROM node:20-alpine AS web-builder
@@ -95,6 +104,7 @@ RUN apt-get update \
  && echo "deb [arch=$( dpkg --print-architecture )] https://repo.jellyfin.org/$( awk -F'=' '/^ID=/{ print $NF }' /etc/os-release ) $( awk -F'=' '/^VERSION_CODENAME=/{ print $NF }' /etc/os-release ) main" > /etc/apt/sources.list.d/jellyfin.list \
  && apt-get update \
  && apt-get install --no-install-recommends --no-install-suggests -y mesa-va-drivers jellyfin-ffmpeg7 openssl locales \
+      fuse3 ffmpeg iptables \
  && apt-get remove gnupg -y \
  && apt-get clean autoclean -y \
  && apt-get autoremove -y \
@@ -136,10 +146,27 @@ COPY deploy/network.xml /usr/share/jellyfin/config-defaults/network.xml
 COPY deploy/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
-EXPOSE 8096
+# --- gostream co-location (single-container FUSE consolidation) ------------------
+# The gostream binary + a supervisor entrypoint that mounts the virtual-MKV FUSE
+# and then starts Jellyfin in the SAME mount namespace (see combined-entrypoint.sh).
+# Defaults put the FUSE at /var/gostream/gostream-mkv-virtual so it matches the
+# plugin's GostreamMoviesRoot/GostreamShowsRoot exactly (no path translation).
+# These GOSTREAM_* envs are overridable from the chart; the config file itself is
+# provided at runtime (ConfigMap + Secret) at MKV_PROXY_CONFIG_PATH.
+COPY --from=gostream-bin /usr/local/bin/gostream /usr/local/bin/gostream
+COPY deploy/combined-entrypoint.sh /usr/local/bin/combined-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/combined-entrypoint.sh
+ENV GOSTREAM_ROOT_PATH=/usr/local/state \
+    GOSTREAM_SOURCE_PATH=/mnt/gostream-mkv-real \
+    GOSTREAM_MOUNT_PATH=/var/gostream/gostream-mkv-virtual \
+    GOSTREAM_STATE_DIR=/usr/local/state/STATE \
+    GOSTREAM_LOG_DIR=/usr/local/state/logs \
+    MKV_PROXY_CONFIG_PATH=/etc/gostream/config.json
+
+EXPOSE 8096 8080 9080 8090
 
 # tini reaps zombies (jellyfin spawns ffmpeg); entrypoint seeds dirs/config/plugins then execs jellyfin.
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/combined-entrypoint.sh"]
 
 HEALTHCHECK --interval=30s --timeout=30s --start-period=20s --retries=3 \
     CMD curl -Lk -fsS "${HEALTHCHECK_URL}" || exit 1
