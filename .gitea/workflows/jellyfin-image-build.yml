@@ -104,6 +104,12 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: quay.io/podman/stable
+      # podman needs to create user/mount namespaces for its rootless internal
+      # builds (nested "clone"/mount syscalls) — without --privileged it fails
+      # immediately with "cannot clone: Operation not permitted" /
+      # "Error: cannot re-exec process" before even reading the Dockerfile.
+      # Same fix already applied on the gostream image-publish job.
+      options: --privileged
     steps:
       # See the "verify" job's note above — the actions/checkout Node.js
       # action cannot run in this node-less container either. image-build.sh
