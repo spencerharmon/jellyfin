@@ -31,12 +31,19 @@
 #      no push) proving the deployable image still builds.
 #
 # PUBLISH (only on merge/push to the tracked branch, never on a PR):
-#   push the built image to the in-cluster Gitea OCI registry as
-#   git.spencerharmon.com/zuul/jellyfin-phantom:<git-sha> — a registry-served,
-#   digest-addressable tag, **NEVER `:latest`**. The `zuul` path segment is a LEGACY
-#   registry namespace only at this point (a flux-owned rename, NOT this task's to
-#   change); flux's blue/green deploy consumes exactly this ref. Verify-After-Merge
-#   confirms the tag is pullable via the registry v2 API (gitea-oci-digest check).
+#   push the built image to the in-cluster Gitea OCI registry under BOTH
+#   namespaces as git.spencerharmon.com/images/jellyfin-phantom:<git-sha> (the
+#   flux-driven `images/` namespace rename, ROI patched-image-oci-namespace-images-
+#   migrate, 25b1fa16 — this is the namespace flux's blue/green repin now consumes)
+#   AND git.spencerharmon.com/zuul/jellyfin-phantom:<git-sha> (the LEGACY namespace,
+#   kept alongside so nothing already pinned to it breaks mid-migration) — both
+#   registry-served, digest-addressable tags, **NEVER `:latest`**. Dual-publishing
+#   the same digest under both refs is deliberate: this task (images-namespace-
+#   image-publish) is the jellyfin-owned producer of the `images/` ref that flux's
+#   migrate task found missing; it does not reopen or remove the legacy `zuul` ref,
+#   which stays owned by `gitea-actions-image-workflow` (DONE) until flux's own
+#   migration retires it. Verify-After-Merge confirms both tags are pullable via
+#   the registry v2 API (gitea-oci-digest check).
 
 name: jellyfin-image-build
 
@@ -47,9 +54,13 @@ on:
   pull_request:
 
 env:
-  # LEGACY registry namespace only — flux owns any future rename of the `zuul`
-  # path segment; this workflow must publish to exactly this ref (never :latest).
-  IMAGE_REPO: git.spencerharmon.com/zuul/jellyfin-phantom
+  # New, ROI-driven namespace: flux's blue/green repin consumes this ref
+  # (patched-image-oci-namespace-images-migrate, 25b1fa16).
+  IMAGE_REPO: git.spencerharmon.com/images/jellyfin-phantom
+  # LEGACY registry namespace, kept alongside during the migration — owned by
+  # `gitea-actions-image-workflow` (DONE); this workflow keeps publishing it too
+  # so nothing still pinned to it breaks. NOT this task's to remove.
+  LEGACY_IMAGE_REPO: git.spencerharmon.com/zuul/jellyfin-phantom
   REGISTRY_HOST: git.spencerharmon.com
 
 jobs:
@@ -97,10 +108,18 @@ jobs:
           # merged tip. NEVER ':latest' (a mutable tag flux must not consume).
           TAG="$(git rev-parse --short=12 HEAD)"
           REF="${IMAGE_REPO}:${TAG}"
-          echo "publishing ${REF} (digest-addressable; never :latest)"
+          LEGACY_REF="${LEGACY_IMAGE_REPO}:${TAG}"
+          echo "publishing ${REF} and ${LEGACY_REF} (digest-addressable; never :latest)"
+          podman login --username "${REGISTRY_USER}" --password "${REGISTRY_TOKEN}" "${REGISTRY_HOST}"
           # Re-tag the image image-build.sh already built (jellyfin-phantom:zuul-ci-check)
           # so we push exactly the artifact the checks proved buildable — no rebuild.
+          # Push under BOTH the new `images/` namespace (flux's blue/green repin
+          # target, ROI patched-image-oci-namespace-images-migrate) and the legacy
+          # `zuul/` namespace (kept alongside so nothing already pinned to it
+          # breaks mid-migration) — same digest, two refs.
           podman tag jellyfin-phantom:zuul-ci-check "${REF}"
-          podman login --username "${REGISTRY_USER}" --password "${REGISTRY_TOKEN}" "${REGISTRY_HOST}"
           podman push "${REF}"
           echo "published ${REF}"
+          podman tag jellyfin-phantom:zuul-ci-check "${LEGACY_REF}"
+          podman push "${LEGACY_REF}"
+          echo "published ${LEGACY_REF}"

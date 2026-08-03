@@ -17,7 +17,10 @@ What it enforces (see docs/tasks/gitea-actions-image-workflow.md for rationale):
     (never a host SDK) and runs BOTH patch-apply-verify.sh and build-verify.sh;
   * an `image` job depends on `verify`, runs in a podman/buildah CONTAINER, runs
     image-build.sh, and has a publish step gated on the push event that pushes to
-    git.spencerharmon.com/zuul/jellyfin-phantom and NEVER uses a ':latest' tag;
+    BOTH git.spencerharmon.com/images/jellyfin-phantom (new, ROI-driven namespace —
+    patched-image-oci-namespace-images-migrate) and git.spencerharmon.com/zuul/
+    jellyfin-phantom (legacy namespace, kept alongside during migration), and NEVER
+    uses a ':latest' tag on either;
   * the three reused CI scripts exist, are executable, and pass `bash -n`.
 
 Exit 0 = all checks pass; 1 = a check failed; 2 = unable to run (missing dep).
@@ -33,7 +36,8 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 WORKFLOW = os.path.join(REPO_ROOT, ".gitea", "workflows", "jellyfin-image-build.yml")
 TOOLS_CI = os.path.join(REPO_ROOT, "tools", "zuul-ci")
 
-REGISTRY_REF = "git.spencerharmon.com/zuul/jellyfin-phantom"
+REGISTRY_REF = "git.spencerharmon.com/images/jellyfin-phantom"
+LEGACY_REGISTRY_REF = "git.spencerharmon.com/zuul/jellyfin-phantom"
 SDK_IMAGE_HINT = "dotnet/sdk:9"
 PODMAN_IMAGE_HINTS = ("podman", "buildah")
 REQUIRED_SCRIPTS = (
@@ -156,11 +160,17 @@ def main() -> int:
             "image-build.sh" in text,
             "`image` job does not run tools/zuul-ci/image-build.sh",
         )
-        # publish step: gated on push, pushes to the legacy-namespaced ref
-        # (the ref is carried in job/workflow env IMAGE_REPO, so match the raw file)
+        # publish step: gated on push, pushes to both the new `images/` ref and
+        # the legacy `zuul/` ref (the refs are carried in job/workflow env
+        # IMAGE_REPO / LEGACY_IMAGE_REPO, so match the raw file)
         check(
             REGISTRY_REF in raw,
             f"workflow does not publish to {REGISTRY_REF}",
+        )
+        check(
+            LEGACY_REGISTRY_REF in raw,
+            f"workflow does not publish to {LEGACY_REGISTRY_REF} (legacy namespace "
+            f"must stay published alongside the new one during migration)",
         )
         check(
             "github.event_name == 'push'" in text
