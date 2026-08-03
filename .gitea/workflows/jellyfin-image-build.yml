@@ -1,0 +1,106 @@
+# jellyfin (patched fork) — Gitea Actions image build + publish pipeline.
+#
+# SUCCESSOR to the removed Zuul pipeline (.zuul.yaml + playbooks/jellyfin-*.yaml).
+# The hive INFRASTRUCTURE.md "CI / build pipelines" policy is explicit: Zuul is
+# DEPRECATED and REMOVED — every pipeline now runs on the operator's self-hosted
+# **Gitea Actions** runner, in CONTAINERS, defined in-repo under .gitea/workflows/.
+# The already-DONE zuul-ci / zuul-image-build-publish tasks stay DONE (historical;
+# the image they already published is unaffected) — this workflow supersedes only
+# their Zuul MECHANISM, reusing the exact same verified CI logic in tools/zuul-ci/.
+#
+# CONTAINERIZED TOOLCHAIN (the whole point — never depend on a host-installed tool):
+#   * the `verify` job runs in the pinned **.NET SDK 9** container
+#     (mcr.microsoft.com/dotnet/sdk:9.0 — matches the fork's global.json
+#     rollForward pin), so the patch-apply + DLL-surface build never needs a host
+#     SDK. This is the exact fix for the pgsql-plugin-bundle failure class (a
+#     `dotnet build` that only worked because a host SDK happened to be symlinked
+#     in): pgsql-plugin-bundle depends on THIS task so its provider build runs in
+#     this SDK-provisioned container instead of requiring a host .NET SDK.
+#   * the `image` job runs in the **podman/buildah** container
+#     (quay.io/podman/stable), so the deployable-image build + registry push never
+#     needs a host container engine. The Dockerfile is self-contained multi-stage
+#     (node + dotnet SDK inside), so buildah/podman is the only tool this job needs.
+#
+# CI CHECKS (mirror the retired zuul-ci scope, 1:1, same scripts):
+#   1. tools/zuul-ci/patch-apply-verify.sh — the additive channel-refresh/item-action
+#      patch applies IDEMPOTENTLY at the exact base tag and FAILS LOUD on any
+#      non-applying hunk (never skip/special-case one).
+#   2. tools/zuul-ci/build-verify.sh — build the fork and assert the four named DLLs
+#      expose their REAL patch surfaces.
+#   3. tools/zuul-ci/image-build.sh — build container-image's Dockerfile (build only,
+#      no push) proving the deployable image still builds.
+#
+# PUBLISH (only on merge/push to the tracked branch, never on a PR):
+#   push the built image to the in-cluster Gitea OCI registry as
+#   git.spencerharmon.com/zuul/jellyfin-phantom:<git-sha> — a registry-served,
+#   digest-addressable tag, **NEVER `:latest`**. The `zuul` path segment is a LEGACY
+#   registry namespace only at this point (a flux-owned rename, NOT this task's to
+#   change); flux's blue/green deploy consumes exactly this ref. Verify-After-Merge
+#   confirms the tag is pullable via the registry v2 API (gitea-oci-digest check).
+
+name: jellyfin-image-build
+
+on:
+  push:
+    branches:
+      - phantom-library/patch-base-10.11.9
+  pull_request:
+
+env:
+  # LEGACY registry namespace only — flux owns any future rename of the `zuul`
+  # path segment; this workflow must publish to exactly this ref (never :latest).
+  IMAGE_REPO: git.spencerharmon.com/zuul/jellyfin-phantom
+  REGISTRY_HOST: git.spencerharmon.com
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # CI checks — patch-apply idempotency + the four DLL surfaces. Runs in the
+  # pinned .NET SDK 9 container so nothing depends on a host-installed SDK.
+  # ---------------------------------------------------------------------------
+  verify:
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/dotnet/sdk:9.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # patch-apply-verify.sh needs the base SHA ancestry
+      - name: patch-apply verification (idempotent, fail-loud)
+        run: ./tools/zuul-ci/patch-apply-verify.sh
+      - name: build the fork + assert the four patched DLL surfaces
+        run: ./tools/zuul-ci/build-verify.sh
+
+  # ---------------------------------------------------------------------------
+  # Image build (always, as a check) + publish (merge/push to tracked branch
+  # only). Runs in the podman/buildah container so nothing depends on a host
+  # container engine.
+  # ---------------------------------------------------------------------------
+  image:
+    needs: verify
+    runs-on: ubuntu-latest
+    container:
+      image: quay.io/podman/stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: build the deployable image (build only — proves it still builds)
+        run: ./tools/zuul-ci/image-build.sh
+      - name: publish to the Gitea OCI registry (merge only, never :latest)
+        if: github.event_name == 'push'
+        env:
+          # The runner supplies a registry-push credential. Prefer an explicit
+          # push token/secret; fall back to the automatic Actions token + actor.
+          REGISTRY_USER: ${{ secrets.GITEA_OCI_PUSH_USER || github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITEA_OCI_PUSH_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          # Registry-served, digest-addressable tag — the immutable git sha of the
+          # merged tip. NEVER ':latest' (a mutable tag flux must not consume).
+          TAG="$(git rev-parse --short=12 HEAD)"
+          REF="${IMAGE_REPO}:${TAG}"
+          echo "publishing ${REF} (digest-addressable; never :latest)"
+          # Re-tag the image image-build.sh already built (jellyfin-phantom:zuul-ci-check)
+          # so we push exactly the artifact the checks proved buildable — no rebuild.
+          podman tag jellyfin-phantom:zuul-ci-check "${REF}"
+          podman login --username "${REGISTRY_USER}" --password "${REGISTRY_TOKEN}" "${REGISTRY_HOST}"
+          podman push "${REF}"
+          echo "published ${REF}"
