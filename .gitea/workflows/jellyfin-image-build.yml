@@ -73,9 +73,22 @@ jobs:
     container:
       image: mcr.microsoft.com/dotnet/sdk:9.0
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # patch-apply-verify.sh needs the base SHA ancestry
+      # NOTE: `actions/checkout@v4` is a Node.js action, and this job runs
+      # inside the plain `mcr.microsoft.com/dotnet/sdk:9.0` container (no node
+      # binary) rather than the runner's own host env — the marketplace
+      # action fails (`exec: "node": executable file not found`). A plain-shell
+      # git clone needs nothing but git (already in the SDK base image) and
+      # works in ANY container, so it replaces the action in every job below.
+      # Full (unshallowed) history — patch-apply-verify.sh needs the base SHA
+      # ancestry, which a shallow `--depth 1` clone would not carry.
+      - name: Checkout (plain git — no node dependency)
+        run: |
+          set -eux
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch origin "${GITHUB_SHA}"
+          git checkout -q FETCH_HEAD
       - name: patch-apply verification (idempotent, fail-loud)
         run: ./tools/zuul-ci/patch-apply-verify.sh
       - name: build the fork + assert the four patched DLL surfaces
@@ -92,7 +105,17 @@ jobs:
     container:
       image: quay.io/podman/stable
     steps:
-      - uses: actions/checkout@v4
+      # See the "verify" job's note above — the actions/checkout Node.js
+      # action cannot run in this node-less container either. image-build.sh
+      # only needs the checked-out tree, so a shallow clone is enough here.
+      - name: Checkout (plain git — no node dependency)
+        run: |
+          set -eux
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git checkout -q FETCH_HEAD
       - name: build the deployable image (build only — proves it still builds)
         run: ./tools/zuul-ci/image-build.sh
       - name: publish to the Gitea OCI registry (merge only, never :latest)
@@ -100,8 +123,12 @@ jobs:
         env:
           # The runner supplies a registry-push credential. Prefer an explicit
           # push token/secret; fall back to the automatic Actions token + actor.
-          REGISTRY_USER: ${{ secrets.GITEA_OCI_PUSH_USER || github.actor }}
-          REGISTRY_TOKEN: ${{ secrets.GITEA_OCI_PUSH_TOKEN || github.token }}
+          # NOTE: a name starting `GITEA_`/`GITHUB_` is a RESERVED secret-name
+          # prefix on this Gitea Actions instance (create/update returns 400
+          # "invalid variable or secret name") — use OCI_REGISTRY_* instead,
+          # the same convention already configured on the gostream repo.
+          REGISTRY_USER: ${{ secrets.OCI_REGISTRY_USERNAME || github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.OCI_REGISTRY_TOKEN || github.token }}
         run: |
           set -euo pipefail
           # Registry-served, digest-addressable tag — the immutable git sha of the
