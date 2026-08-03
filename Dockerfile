@@ -15,16 +15,24 @@
 #   Jellyfin.LiveTv.dll (both carry the patch surface) and MediaBrowser.Model.dll, Jellyfin.Api.dll
 #   (stock in this patch) — are ordinary outputs of `dotnet publish Jellyfin.Server` below.
 #
-# PLUGIN DELIVERY — documented init, NOT baked (see ARTIFACTS.md "Container image"):
+# PLUGIN DELIVERY — preload-staged, installed by the entrypoint (see ARTIFACTS.md "Container image"):
 #   Jellyfin loads plugins from ${JELLYFIN_DATA_DIR}/plugins, and /var/lib/jellyfin is a runtime
-#   PVC (colocation-persistence-contract), so anything baked under it is shadowed by the mount.
-#   The `phantom-library` plugin DLL is ALSO built from a separate repo (it ProjectReferences this
-#   patched fork) and no phantom-library task yet emits a standalone consumable plugin artifact to
-#   pin — so this image does NOT build or bake the plugin. Instead the entrypoint INSTALLS, on
-#   start, any plugin folders staged read-only under ${JELLYFIN_PLUGIN_PRELOAD_DIR} into the
-#   (PVC-mounted) data-dir plugins folder if absent. flux's phantom-library-bluegreen-deploy
-#   supplies the phantom-library-built plugin at that path (init-container / sidecar / mount).
-#   See deploy/docker-entrypoint.sh.
+#   PVC (colocation-persistence-contract), so anything baked directly under it is shadowed by the
+#   mount. Every plugin — baked here or supplied at deploy time — is instead staged read-only under
+#   ${JELLYFIN_PLUGIN_PRELOAD_DIR}, and the entrypoint installs each staged plugin folder into the
+#   (PVC-mounted) data-dir plugins folder on first boot only (idempotent; never clobbers an
+#   operator-updated install). See deploy/docker-entrypoint.sh.
+#     * `Jellyfin.Pgsql` (task `pgsql-plugin-bundle`) IS built and baked by THIS Dockerfile: it
+#       vendors the upstream JPVenson/Jellyfin.Pgsql provider at a pinned tag+SHA (see
+#       Jellyfin.Pgsql/UPSTREAM.md) and stages the built DLL + meta.json into the preload dir below.
+#       It reads its Postgres DSN entirely from POSTGRES_HOST/PORT/DB/USER/PASSWORD env vars (never
+#       a hardcoded DSN) — the per-color `jellyfin_dev`/`jellyfin_prod` logical DB selection is
+#       wired through those env vars by the deploy chart values (owned by phantom-library's Postgres
+#       P4 Stage-A), not by this image.
+#     * `phantom-library` is NOT baked here: it is built from a separate repo (it ProjectReferences
+#       this patched fork) and no phantom-library task yet emits a standalone consumable plugin
+#       artifact to pin, so flux's phantom-library-bluegreen-deploy supplies it at the same preload
+#       path at deploy time (init-container / sidecar / mount) instead.
 #
 # BUILD (amd64):
 #   podman build -t ghcr.io/spencerharmon/jellyfin-phantom:10.11.11 -f Dockerfile .
@@ -61,6 +69,19 @@ RUN dotnet publish Jellyfin.Server \
         --self-contained \
         --runtime linux-x64 \
         -p:DebugSymbols=false -p:DebugType=none
+
+########################################
+# Stage 2b — build the vendored Postgres provider plugin (task pgsql-plugin-bundle)
+########################################
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS pgsql-plugin-builder
+WORKDIR /repo
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+COPY . .
+RUN dotnet publish Jellyfin.Pgsql/Jellyfin.Pgsql.csproj \
+        --configuration Release \
+        --output /pgsql-plugin \
+        -p:DebugSymbols=false -p:DebugType=none \
+ && cp Jellyfin.Pgsql/meta.json /pgsql-plugin/meta.json
 
 ########################################
 # Stage 3 — runtime
@@ -113,6 +134,12 @@ ENV LANGUAGE=en_US:en
 # Patched server + web client.
 COPY --from=server-builder /jellyfin /jellyfin
 COPY --from=web-builder /dist "${JELLYFIN_WEB_DIR}"
+
+# Baked plugin: vendored Postgres provider (task pgsql-plugin-bundle), staged into the preload dir
+# above; the entrypoint installs it into ${JELLYFIN_DATA_DIR}/plugins on first boot (see comment
+# atop this file). DSN comes from POSTGRES_* env vars set by the deploy chart values — never baked
+# here.
+COPY --from=pgsql-plugin-builder /pgsql-plugin "${JELLYFIN_PLUGIN_PRELOAD_DIR}/Jellyfin.Pgsql"
 
 # Phantom Library web-UI shims (kebab menu + source picker, and item badges).
 # Jellyfin 10.11.x BrandingOptions only exposes CustomCss (no CustomJs), and the
