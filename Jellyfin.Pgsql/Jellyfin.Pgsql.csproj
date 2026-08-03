@@ -1,0 +1,62 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.Pgsql</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Nullable>enable</Nullable>
+    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <!-- Vendored as-is from upstream JPVenson/Jellyfin.Pgsql (see UPSTREAM.md), which pins its own
+         PackageReference versions inline. This fork's Directory.Packages.props enables central
+         package version management repo-wide; opt this vendored project out rather than fold its
+         pins into the shared Directory.Packages.props, so a ref bump only ever touches this file. -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <!-- Upstream builds via its own jellyfin.ruleset (not vendored — this fork does not carry it,
+         and it is not otherwise referenced by this repo). Upstream's EF Core migration scaffolds
+         (Migrations/*.cs) are tool-generated with the EF Tools' own `<timestamp>_<Name>` naming
+         convention (unmodified upstream content, never hand-edited) and unconditionally trip
+         CA1707 (no-underscores) under AllEnabledByDefault + TreatWarningsAsErrors. Suppress CA1707
+         for this vendored project rather than alter the upstream-generated migration files. -->
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.11" PrivateAssets="all" />
+    <PackageReference Include="Jellyfin.Model" Version="10.11.11" PrivateAssets="all" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
+    <PackageReference Include="Npgsql" Version="9.0.4" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Abstractions" Version="9.0.11" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="9.0.11" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="9.0.11" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="9.0.11" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.11" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.11" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.11" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.11" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="9.0.11" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Primitives" Version="9.0.11" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.11" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.11" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.11">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="9.0.11">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SerilogAnalyzer" Version="0.15.0" PrivateAssets="All" />
+    <PackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556" PrivateAssets="All" />
+    <PackageReference Include="SmartAnalyzers.MultithreadingAnalyzer" Version="1.1.31" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Configuration\configPage.html" />
+    <EmbeddedResource Include="Configuration\configPage.html" />
+  </ItemGroup>
+
+</Project>

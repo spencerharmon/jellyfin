@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>PostgreSQL Database</title>
+</head>
+<body>
+    <div id="PostgreSQLConfigPage" data-role="page" class="page type-interior pluginConfigurationPage">
+        <div data-role="content">
+            <div class="content-primary">
+                <h2>PostgreSQL Database Configuration</h2>
+                <p>This plugin uses environment variables for configuration. Set the following environment variables before starting Jellyfin:</p>
+
+                <div class="detailSection">
+                    <div class="detailSectionHeader">
+                        <h3>Required Environment Variables</h3>
+                    </div>
+                    <div class="detailSectionContent">
+                        <ul>
+                            <li><strong>POSTGRES_PASSWORD</strong> - Database password (required)</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="detailSection">
+                    <div class="detailSectionHeader">
+                        <h3>Optional Environment Variables (with defaults)</h3>
+                    </div>
+                    <div class="detailSectionContent">
+                        <ul>
+                            <li><strong>POSTGRES_HOST</strong> - Database host (default: localhost)</li>
+                            <li><strong>POSTGRES_PORT</strong> - Database port (default: 5432)</li>
+                            <li><strong>POSTGRES_DB</strong> - Database name (default: jellyfin)</li>
+                            <li><strong>POSTGRES_USER</strong> - Database user (default: jellyfin)</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="detailSection">
+                    <div class="detailSectionHeader">
+                        <h3>Example Docker Compose</h3>
+                    </div>
+                    <div class="detailSectionContent">
+                        <pre class="codeblock">
+environment:
+  - POSTGRES_HOST=postgres
+  - POSTGRES_PORT=5432
+  - POSTGRES_DB=jellyfin
+  - POSTGRES_USER=jellyfin
+  - POSTGRES_PASSWORD=your_secure_password</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
