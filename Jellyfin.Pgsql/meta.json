@@ -1,0 +1,12 @@
+{
+  "category": "General",
+  "changelog": "Vendored from upstream JPVenson/Jellyfin.Pgsql tag 10.11.11-1 (f410c8a874f5298ac9f244145457e9a65ea757e5). See UPSTREAM.md.",
+  "description": "PostgreSQL database provider for Jellyfin. Configure via POSTGRES_HOST/POSTGRES_PORT/POSTGRES_DB/POSTGRES_USER/POSTGRES_PASSWORD environment variables (never a hardcoded DSN) — see UPSTREAM.md.",
+  "guid": "27e7ad18-ea71-4b19-b1a9-6e4c2e4d5e18",
+  "name": "PostgreSQL Database",
+  "overview": "PostgreSQL provider for Jellyfin",
+  "owner": "JPVenson",
+  "targetAbi": "10.11.11.0",
+  "timestamp": "2026-08-03T08:55:49.0000000Z",
+  "version": "10.11.11.1"
+}
