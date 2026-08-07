@@ -29,10 +29,15 @@
 #       a hardcoded DSN) — the per-color `jellyfin_dev`/`jellyfin_prod` logical DB selection is
 #       wired through those env vars by the deploy chart values (owned by phantom-library's Postgres
 #       P4 Stage-A), not by this image.
-#     * `phantom-library` is NOT baked here: it is built from a separate repo (it ProjectReferences
-#       this patched fork) and no phantom-library task yet emits a standalone consumable plugin
-#       artifact to pin, so flux's phantom-library-bluegreen-deploy supplies it at the same preload
-#       path at deploy time (init-container / sidecar / mount) instead.
+#     * `Jellyfin.Plugin.PhantomLibrary` (the phantom-library plugin) IS baked here too, at a pinned
+#       ref (ARG PHANTOM_LIBRARY_REF): its build lives in a separate repo that ProjectReferences this
+#       patched fork (the fork is normally its `jellyfin/` submodule). Stage 2c clones it at that ref,
+#       supplies THIS image's fork source as `./jellyfin` so the plugin binds against the exact fork
+#       we ship, and packages it with `jprm` (the same tool phantom-library's release.yaml uses, which
+#       emits a correct standalone plugin package — plugin DLL + private deps, host assemblies
+#       excluded). Bump PHANTOM_LIBRARY_REF (and repin the deploy image) to ship a newer plugin. Its
+#       Postgres DSN also comes from POSTGRES_*/PHANTOM_POSTGRES_* env set by the deploy chart, never
+#       baked here.
 #
 # BUILD (amd64):
 #   podman build -t ghcr.io/spencerharmon/jellyfin-phantom:10.11.11 -f Dockerfile .
@@ -82,6 +87,33 @@ RUN dotnet publish Jellyfin.Pgsql/Jellyfin.Pgsql.csproj \
         --output /pgsql-plugin \
         -p:DebugSymbols=false -p:DebugType=none \
  && cp Jellyfin.Pgsql/meta.json /pgsql-plugin/meta.json
+
+########################################
+# Stage 2c — build the phantom-library plugin (baked; postgres-capable, pinned ref)
+########################################
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS phantom-plugin-builder
+# Pinned phantom-library commit carrying the PhantomDb Postgres provider (plugin 0.4.0.0).
+ARG PHANTOM_LIBRARY_REF=05eea30263ade3ccc90983789031dc045f5bb7db
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+WORKDIR /phantom
+# jprm (Jellyfin Plugin Repository Manager) produces a correct standalone plugin package; the SDK
+# base ships neither git nor python/jprm/unzip.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git python3 python3-pip ca-certificates unzip \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir --break-system-packages jprm
+# Clone phantom-library at the pinned ref, then replace its `jellyfin/` submodule dir with THIS
+# image's fork source so the plugin's ProjectReferences bind against the exact patched fork we ship.
+RUN git clone https://github.com/spencerharmon/phantom-library.git . \
+ && git checkout "${PHANTOM_LIBRARY_REF}" \
+ && rm -rf jellyfin
+COPY . ./jellyfin
+# Package the plugin (Release, version from build.yaml) and unpack the zip into a single plugin
+# folder for the preload dir.
+RUN jprm --verbosity=debug plugin build . --output=/artifacts \
+        --dotnet-configuration=Release --dotnet-framework=net9.0 \
+ && mkdir -p /phantom-plugin \
+ && unzip -o /artifacts/*.zip -d /phantom-plugin
 
 ########################################
 # Stage 3 — runtime
@@ -140,6 +172,11 @@ COPY --from=web-builder /dist "${JELLYFIN_WEB_DIR}"
 # atop this file). DSN comes from POSTGRES_* env vars set by the deploy chart values — never baked
 # here.
 COPY --from=pgsql-plugin-builder /pgsql-plugin "${JELLYFIN_PLUGIN_PRELOAD_DIR}/Jellyfin.Pgsql"
+
+# Baked plugin: phantom-library plugin (postgres-capable, pinned ref), staged into the preload dir;
+# the entrypoint installs it into ${JELLYFIN_DATA_DIR}/plugins on first boot. Built by stage 2c via
+# jprm against THIS image's fork. Supersedes the prior manual-PVC install as the delivery mechanism.
+COPY --from=phantom-plugin-builder /phantom-plugin "${JELLYFIN_PLUGIN_PRELOAD_DIR}/Jellyfin.Plugin.PhantomLibrary"
 
 # Phantom Library web-UI shims (kebab menu + source picker, and item badges).
 # Jellyfin 10.11.x BrandingOptions only exposes CustomCss (no CustomJs), and the
