@@ -109,8 +109,12 @@ RUN git clone https://github.com/spencerharmon/phantom-library.git . \
  && rm -rf jellyfin
 COPY . ./jellyfin
 # Package the plugin (Release, version from build.yaml) and unpack the zip into a single plugin
-# folder for the preload dir.
-RUN jprm --verbosity=debug plugin build . --output=/artifacts \
+# folder for the preload dir. `mkdir -p /artifacts` FIRST: jprm writes its packaged zip to
+# --output but does NOT create that directory, so without it jprm fails with
+# `[Errno 2] No such file or directory: '/artifacts/<name>_<version>.zip'` AFTER compiling the
+# DLLs. phantom-library's own release.yaml does the same `mkdir -p artifacts` before jprm.
+RUN mkdir -p /artifacts \
+ && jprm --verbosity=debug plugin build . --output=/artifacts \
         --dotnet-configuration=Release --dotnet-framework=net9.0 \
  && mkdir -p /phantom-plugin \
  && unzip -o /artifacts/*.zip -d /phantom-plugin
