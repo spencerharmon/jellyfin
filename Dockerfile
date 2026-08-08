@@ -108,16 +108,44 @@ RUN git clone https://github.com/spencerharmon/phantom-library.git . \
  && git checkout "${PHANTOM_LIBRARY_REF}" \
  && rm -rf jellyfin
 COPY . ./jellyfin
+# Reference set of assemblies the Jellyfin host already ships (the published server output). Used
+# below to decide which of the plugin's publish-closure DLLs must be bundled vs. resolved from the
+# host at runtime.
+COPY --from=server-builder /jellyfin /host-ref
 # Package the plugin (Release, version from build.yaml) and unpack the zip into a single plugin
 # folder for the preload dir. `mkdir -p /artifacts` FIRST: jprm writes its packaged zip to
 # --output but does NOT create that directory, so without it jprm fails with
 # `[Errno 2] No such file or directory: '/artifacts/<name>_<version>.zip'` AFTER compiling the
 # DLLs. phantom-library's own release.yaml does the same `mkdir -p artifacts` before jprm.
+#
+# build.yaml `artifacts:` lists ONLY the plugin DLL, so the jprm zip ships none of the plugin's
+# NuGet dependencies. 0.3.0.0's deps (Microsoft.Data.Sqlite + SQLitePCLRaw) happened to be
+# host-provided, but 0.4.0.0 adds OpenTelemetry (+ its Grpc/Protobuf transitive closure) and
+# Npgsql/NCrontab/prometheus-net which the Jellyfin host does NOT ship, so the plugin fails to load
+# with `Could not load file or assembly 'OpenTelemetry.Exporter.OpenTelemetryProtocol'`. We
+# `dotnet publish` the plugin to resolve its full runtime closure, then bundle into the plugin dir
+# every dependency the host lacks. The Jellyfin ProjectReferences aren't marked `Private=false`, so
+# the publish output also contains the host's own assemblies + their third-party deps (SkiaSharp,
+# etc.); the `/host-ref` check skips those. The explicit allowlist force-bundles the plugin's
+# third-party stack even if a same-named assembly exists on the host, so the plugin's load context
+# always binds the exporter to a matching OpenTelemetry core (a separate ALC from the host).
 RUN mkdir -p /artifacts \
  && jprm --verbosity=debug plugin build . --output=/artifacts \
         --dotnet-configuration=Release --dotnet-framework=net9.0 \
  && mkdir -p /phantom-plugin \
- && unzip -o /artifacts/*.zip -d /phantom-plugin
+ && unzip -o /artifacts/*.zip -d /phantom-plugin \
+ && dotnet publish src/Jellyfin.Plugin.PhantomLibrary/Jellyfin.Plugin.PhantomLibrary.csproj \
+        -c Release -f net9.0 --no-self-contained -o /phantom-publish \
+ && for f in /phantom-publish/*.dll; do \
+        b="$(basename "$f")"; \
+        case "$b" in \
+          Jellyfin.Plugin.PhantomLibrary.dll) continue ;; \
+          OpenTelemetry*|Grpc*|Google.Protobuf*|Npgsql*|NCrontab*|prometheus-net*) cp -n "$f" /phantom-plugin/ ; continue ;; \
+          System.*|netstandard.dll|Microsoft.*|SQLitePCLRaw*|Jellyfin.*|MediaBrowser.*) continue ;; \
+          *) [ -f "/host-ref/$b" ] || cp -n "$f" /phantom-plugin/ ;; \
+        esac; \
+    done \
+ && echo "=== phantom plugin dir contents ===" && ls -1 /phantom-plugin
 
 ########################################
 # Stage 3 — runtime
@@ -152,8 +180,16 @@ RUN apt-get update \
  && apt-get install --no-install-recommends --no-install-suggests -y ca-certificates gnupg curl tini \
  && curl -fsSL https://repo.jellyfin.org/jellyfin_team.gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/debian-jellyfin.gpg \
  && echo "deb [arch=$( dpkg --print-architecture )] https://repo.jellyfin.org/$( awk -F'=' '/^ID=/{ print $NF }' /etc/os-release ) $( awk -F'=' '/^VERSION_CODENAME=/{ print $NF }' /etc/os-release ) main" > /etc/apt/sources.list.d/jellyfin.list \
+ # PGDG repo for postgresql-client-16: the Jellyfin.Pgsql provider shells out to `pg_dump`
+ # (MigrationBackupFast) and `psql` (RestoreBackupFast) to back up / restore the Postgres DB
+ # around startup migrations. Without a client the server dies with `An error occurred trying to
+ # start process 'pg_dump' ... No such file or directory` before the EF migrations build the
+ # schema. The client MAJOR must be >= the server (16.x here): bookworm's default postgresql-client
+ # is 15, whose pg_dump refuses a v16 server, so pull v16 from apt.postgresql.org.
+ && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg \
+ && echo "deb [arch=$( dpkg --print-architecture )] https://apt.postgresql.org/pub/repos/apt $( awk -F'=' '/^VERSION_CODENAME=/{ print $NF }' /etc/os-release )-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
  && apt-get update \
- && apt-get install --no-install-recommends --no-install-suggests -y mesa-va-drivers jellyfin-ffmpeg7 openssl locales \
+ && apt-get install --no-install-recommends --no-install-suggests -y mesa-va-drivers jellyfin-ffmpeg7 openssl locales postgresql-client-16 \
  && apt-get remove gnupg -y \
  && apt-get clean autoclean -y \
  && apt-get autoremove -y \
