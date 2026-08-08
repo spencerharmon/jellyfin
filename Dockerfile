@@ -93,7 +93,7 @@ RUN dotnet publish Jellyfin.Pgsql/Jellyfin.Pgsql.csproj \
 ########################################
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS phantom-plugin-builder
 # Pinned phantom-library commit carrying the PhantomDb Postgres provider (plugin 0.4.0.0).
-ARG PHANTOM_LIBRARY_REF=05eea30263ade3ccc90983789031dc045f5bb7db
+ARG PHANTOM_LIBRARY_REF=c692ffd113dcdca32f574cbb7a843b609f26d650
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 WORKDIR /phantom
 # jprm (Jellyfin Plugin Repository Manager) produces a correct standalone plugin package; the SDK
@@ -108,6 +108,16 @@ RUN git clone https://github.com/spencerharmon/phantom-library.git . \
  && git checkout "${PHANTOM_LIBRARY_REF}" \
  && rm -rf jellyfin
 COPY . ./jellyfin
+# Reference set of assemblies the Jellyfin host already ships (its published server output). The
+# bundle step below copies ONLY dependencies absent from this set, so host-provided framework /
+# extension assemblies (Microsoft.Extensions.*, System.Diagnostics.DiagnosticSource, Emby.Naming,
+# Jellyfin.*, prometheus-net, ...) resolve from the host's Default load context at runtime -- REQUIRED
+# for correctness: Jellyfin loads each plugin in an isolated PluginLoadContext, and bundling a
+# host-provided assembly (e.g. Microsoft.Extensions.DependencyInjection.Abstractions) gives the plugin
+# a second copy of IServiceCollection, breaking DI type identity when the host calls the plugin's
+# RegisterServices. OpenTelemetry is pinned (in phantom-library) to the .NET 9-aligned 1.10.0 so it
+# binds the host's DiagnosticSource 9.0 rather than demanding 10.0.
+COPY --from=server-builder /jellyfin /host-ref
 # Mark the patched-Jellyfin ProjectReferences as compile-only (Private=false + ExcludeAssets=runtime)
 # so `dotnet publish` below emits ONLY the plugin + its own NuGet dependency closure -- NOT the host
 # fork assemblies or their third-party transitive deps (SkiaSharp, etc.). This makes the bundle step
@@ -127,13 +137,12 @@ RUN sed -i -E 's#(<ProjectReference[^/]*)/>#\1Private="false" ExcludeAssets="run
 #
 # build.yaml `artifacts:` lists ONLY the plugin DLL, so the jprm zip ships none of the plugin's
 # NuGet dependencies. 0.3.0.0's deps (Microsoft.Data.Sqlite + SQLitePCLRaw) happened to be
-# host-provided, but 0.4.0.0 adds OpenTelemetry (+ its Grpc/Protobuf closure and a NEWER
-# System.Diagnostics.DiagnosticSource) and Npgsql/NCrontab/prometheus-net which the Jellyfin host
-# does NOT ship (or ships at an older version), so the plugin fails to load. We `dotnet publish` the
-# plugin -- now emitting only its own closure thanks to the compile-only ProjectReferences above --
-# and bundle every DLL into the plugin dir, EXCEPT: the plugin DLL itself (already unzipped) and the
-# SQLite native stack (Microsoft.Data.Sqlite + SQLitePCLRaw), which must resolve from the host ALC
-# because its unmanaged e_sqlite3 lives there (0.3.0.0-proven).
+# host-provided, but 0.4.0.0 adds OpenTelemetry (+ its Grpc/Protobuf closure) and Npgsql/NCrontab
+# which the Jellyfin host does NOT ship, so the plugin fails to load without them. We `dotnet publish`
+# the plugin -- emitting only its own closure thanks to the compile-only ProjectReferences above --
+# and bundle every DLL the host LACKS (checked by name against /host-ref), EXCEPT the plugin DLL
+# itself (already unzipped). Host-provided assemblies are intentionally NOT bundled (see /host-ref
+# comment above), which also keeps the SQLite native stack resolving from the host ALC.
 RUN mkdir -p /artifacts \
  && jprm --verbosity=debug plugin build . --output=/artifacts \
         --dotnet-configuration=Release --dotnet-framework=net9.0 \
@@ -143,11 +152,9 @@ RUN mkdir -p /artifacts \
         -c Release -f net9.0 --no-self-contained -o /phantom-publish \
  && for f in /phantom-publish/*.dll; do \
         b="$(basename "$f")"; \
-        case "$b" in \
-          Jellyfin.Plugin.PhantomLibrary.dll) continue ;; \
-          Microsoft.Data.Sqlite.dll|SQLitePCLRaw*) continue ;; \
-          *) cp -n "$f" /phantom-plugin/ ;; \
-        esac; \
+        [ "$b" = Jellyfin.Plugin.PhantomLibrary.dll ] && continue; \
+        [ -f "/host-ref/$b" ] && continue; \
+        cp -n "$f" /phantom-plugin/ ; \
     done \
  && echo "=== phantom plugin dir contents ===" && ls -1 /phantom-plugin
 
