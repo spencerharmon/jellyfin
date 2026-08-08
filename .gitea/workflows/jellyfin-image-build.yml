@@ -72,15 +72,14 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/dotnet/sdk:9.0
-      # Run the job container on the runner's HOST (pod) network. The runner's
-      # nested docker-in-docker default bridge has NO outbound internet route
-      # (IPv4 egress to api.nuget.org times out; IPv6 is unrouted), so a normal
-      # bridged job container cannot `dotnet restore` from nuget.org and every
-      # build dies after ~2.5h of 100s-per-package restore timeouts (NU1301).
-      # The pod network DOES egress, so host networking is the fix until the
-      # cluster grows a proper build-container egress path / in-cluster NuGet
-      # mirror. Verified: a `--network=host` container reaches nuget in ~0.1s.
-      options: --network=host
+      # Egress note: this job restores from api.nuget.org. Outbound HTTPS from the
+      # runner's docker-in-docker bridge previously blackholed (docker0 came up at
+      # MTU 1500 while the flannel pod network is 1450 and PMTU ICMP is filtered),
+      # so `dotnet restore` dead-waited ~2.5h to the job timeout (NU1301). Fixed at
+      # the source in flux (gitea-actions dind `--mtu=1450`), so a plain bridged job
+      # container now egresses normally — no per-job network override needed here.
+      # (act_runner ignores a `--network=host` option on job containers anyway; it
+      # attaches them to its configured `container.network`.)
     steps:
       # NOTE: `actions/checkout@v4` is a Node.js action, and this job runs
       # inside the plain `mcr.microsoft.com/dotnet/sdk:9.0` container (no node
@@ -116,11 +115,11 @@ jobs:
       # --privileged: podman needs user/mount namespaces for its rootless internal
       # builds (nested "clone"/mount syscalls) — without it, it fails immediately
       # with "cannot clone: Operation not permitted" before reading the Dockerfile.
-      # --network=host: the job container (and, via `podman build --network=host`
-      # in image-build.sh, the Dockerfile's RUN steps) must egress to the internet
-      # for NuGet/apt/pip/github restores; the runner's nested bridge networks have
-      # no outbound route, only the pod (host) network does. See the verify job.
-      options: --privileged --network=host
+      # Same fix already applied on the gostream image-publish job.
+      # (Bridge egress itself is fixed at the flux dind `--mtu=1450` layer; the
+      # Dockerfile RUN steps reach the internet via `podman build --network=host`
+      # in image-build.sh, which reuses this job container's now-correct netns.)
+      options: --privileged
     steps:
       # See the "verify" job's note above — the actions/checkout Node.js
       # action cannot run in this node-less container either. image-build.sh

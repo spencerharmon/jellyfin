@@ -62,12 +62,14 @@ if [ "$DRYRUN" = 1 ]; then
 else
     builder="$(pick_builder)" || die "no container builder found (need podman or docker)"
     note "builder: $builder"
-    # Build the Dockerfile's RUN steps on the host network. The self-hosted Gitea
-    # Actions runner's nested bridge networks have no outbound internet route, so a
-    # default-network build cannot restore NuGet/apt/pip/github and times out. The
-    # job container already runs on the pod (host) network (see the workflow), and
-    # `--network=host` propagates that egress to the build steps. Override with
-    # JELLYFIN_CI_BUILD_NETWORK= (empty) on a host whose default network egresses.
+    # Run the Dockerfile's RUN steps on the job container's own network namespace.
+    # The image job runs inside a podman container on the runner's dind bridge; a
+    # default `podman build` would spin up its OWN nested netavark bridge for the
+    # RUN containers, which defaults to MTU 1500 and re-introduces the pod-network
+    # (1450) blackhole that stalls NuGet/apt/pip/github restores. `--network=host`
+    # makes the RUN steps share this (already MTU-1450, egress-healthy) job
+    # container's netns instead. Override with JELLYFIN_CI_BUILD_NETWORK= (empty)
+    # on a host whose builder default network already egresses.
     BUILD_NETWORK="${JELLYFIN_CI_BUILD_NETWORK-host}"
     net_flag=()
     [ -n "$BUILD_NETWORK" ] && net_flag=(--network="$BUILD_NETWORK")
