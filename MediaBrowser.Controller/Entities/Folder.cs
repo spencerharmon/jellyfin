@@ -684,7 +684,7 @@ namespace MediaBrowser.Controller.Entities
                 }
             }
 
-            var result = GetItems(new InternalItemsQuery(user)
+            return GetItemCount(new InternalItemsQuery(user)
             {
                 Recursive = false,
                 Limit = 0,
@@ -694,13 +694,11 @@ namespace MediaBrowser.Controller.Entities
                     EnableImages = false
                 }
             });
-
-            return result.TotalRecordCount;
         }
 
         public virtual int GetRecursiveChildCount(User user)
         {
-            return GetItems(new InternalItemsQuery(user)
+            return GetItemCount(new InternalItemsQuery(user)
             {
                 Recursive = true,
                 IsFolder = false,
@@ -711,7 +709,37 @@ namespace MediaBrowser.Controller.Entities
                 {
                     EnableImages = false
                 }
-            }).TotalRecordCount;
+            });
+        }
+
+        /// <summary>
+        /// Returns the number of items matching <paramref name="query"/> under this folder.
+        /// </summary>
+        /// <remarks>
+        /// Channel-sourced folders already have their children persisted in the library
+        /// database. Counting them through <see cref="GetItems(InternalItemsQuery)"/> routes
+        /// into <see cref="GetItemsInternal(InternalItemsQuery)"/>, which re-invokes the channel
+        /// provider and re-synchronises every child on each call. That is a severe N+1: cheap on
+        /// in-process SQLite, but one network round-trip per child on PostgreSQL, so a single
+        /// channel page -- which computes child/recursive/unplayed counts per row -- explodes
+        /// into tens of thousands of queries. For channel folders we count straight from the
+        /// database, which already holds the synchronised rows; the count is identical.
+        /// </remarks>
+        /// <param name="query">The query describing the items to count.</param>
+        /// <returns>The number of matching items.</returns>
+        private int GetItemCount(InternalItemsQuery query)
+        {
+            if (SourceType == SourceType.Channel)
+            {
+                if (query.ParentId.IsEmpty())
+                {
+                    query.Parent = this;
+                }
+
+                return LibraryManager.GetCount(query);
+            }
+
+            return GetItems(query).TotalRecordCount;
         }
 
         public QueryResult<BaseItem> QueryRecursive(InternalItemsQuery query)
@@ -1809,7 +1837,7 @@ namespace MediaBrowser.Controller.Entities
 
             if (SupportsPlayedStatus)
             {
-                var unplayedQueryResult = GetItems(new InternalItemsQuery(user)
+                var unplayedQueryResult = GetItemCount(new InternalItemsQuery(user)
                 {
                     Recursive = true,
                     IsFolder = false,
@@ -1821,7 +1849,7 @@ namespace MediaBrowser.Controller.Entities
                     {
                         EnableImages = false
                     }
-                }).TotalRecordCount;
+                });
 
                 dto.UnplayedItemCount = unplayedQueryResult;
 

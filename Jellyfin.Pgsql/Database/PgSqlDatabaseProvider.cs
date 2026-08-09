@@ -263,7 +263,22 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             Port = int.Parse(Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432", CultureInfo.InvariantCulture),
             Database = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "jellyfin",
             Username = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "jellyfin",
-            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable")
+            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable"),
+
+            // Performance: library browsing (especially IChannel listings) issues thousands
+            // of tiny, identically-shaped queries per page (per-item channel sync + recursive
+            // ChildCount/RecursiveItemCount/unplayed DTO counts). On SQLite these run in-process;
+            // on PostgreSQL every one is a network round-trip whose cost is dominated by query
+            // PLANNING -- the BaseItems table carries 13 indexes, so a cold plan measures ~10ms
+            // versus <1ms execution -- plus a DISCARD ALL each time EF Core's pooled DbContext
+            // factory returns its rented connection. Server-side auto-prepared statements plan
+            // each shape once and reuse it; NoResetOnClose keeps those prepared statements alive
+            // (and skips the DISCARD ALL round-trip) across the rent/return churn. This does not
+            // change query results -- only per-query overhead. Safe because the app sets no
+            // per-session state (collation is schema-level, UTC conversion is client-side).
+            MaxAutoPrepare = 200,
+            AutoPrepareMinUsages = 2,
+            NoResetOnClose = true
         };
 
         if (includeErrorDetail)
