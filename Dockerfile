@@ -93,7 +93,7 @@ RUN dotnet publish Jellyfin.Pgsql/Jellyfin.Pgsql.csproj \
 ########################################
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS phantom-plugin-builder
 # Pinned phantom-library commit carrying the PhantomDb Postgres provider (plugin 0.4.0.0).
-ARG PHANTOM_LIBRARY_REF=4437f310b14e8cd3c9381e7db51bc6aa8031d101
+ARG PHANTOM_LIBRARY_REF=c1ad06300be9218eda9e9f26c5bd35aeb5d175d3
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 WORKDIR /phantom
 # jprm (Jellyfin Plugin Repository Manager) produces a correct standalone plugin package; the SDK
