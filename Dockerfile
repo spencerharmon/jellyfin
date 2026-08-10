@@ -93,7 +93,7 @@ RUN dotnet publish Jellyfin.Pgsql/Jellyfin.Pgsql.csproj \
 ########################################
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS phantom-plugin-builder
 # Pinned phantom-library commit carrying the PhantomDb Postgres provider (plugin 0.4.0.0).
-ARG PHANTOM_LIBRARY_REF=c1ad06300be9218eda9e9f26c5bd35aeb5d175d3
+ARG PHANTOM_LIBRARY_REF=da0862df22e5f136c40dd2d5eb66c1f2c5e3076d
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 WORKDIR /phantom
 # jprm (Jellyfin Plugin Repository Manager) produces a correct standalone plugin package; the SDK
@@ -213,6 +213,32 @@ RUN apt-get update \
 ENV LC_ALL=en_US.UTF-8
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
+
+# OpenSSL integrity gate. A prior build baked a CORRUPT libcrypto.so.3 into the image: same Debian
+# package version (openssl/libssl3 3.0.20-1~deb12u2) as a known-good build, same file size, but
+# different bytes -- so basic crypto (RNG/hash) worked while every TLS *handshake* segfaulted,
+# crashing every outbound HTTPS (metadata/TMDB/source probes) at runtime and taking the whole
+# process down. dpkg installs deterministic bytes, so differing bytes for the same package can only
+# be corruption during the image build. Reinstall to overwrite libcrypto/libssl with a clean copy,
+# then HARD-VERIFY with a real local TLS handshake so a corrupt OpenSSL FAILS THE BUILD LOUDLY here
+# instead of shipping and crashlooping in production.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install --reinstall --no-install-recommends --no-install-suggests -y libssl3 openssl; \
+    apt-get clean autoclean -y; \
+    rm -rf /var/lib/apt/lists/*; \
+    openssl version; \
+    openssl req -x509 -newkey rsa:2048 -keyout /tmp/tls-selftest-key.pem -out /tmp/tls-selftest-cert.pem \
+        -days 1 -nodes -subj '/CN=tls-selftest' >/dev/null 2>&1; \
+    openssl s_server -quiet -no_ticket -key /tmp/tls-selftest-key.pem -cert /tmp/tls-selftest-cert.pem \
+        -accept 14433 >/dev/null 2>&1 & \
+    srv=$!; \
+    sleep 1; \
+    if printf 'Q\n' | openssl s_client -connect 127.0.0.1:14433 -servername tls-selftest >/dev/null 2>&1; then rc=0; else rc=$?; fi; \
+    kill "$srv" 2>/dev/null || true; \
+    rm -f /tmp/tls-selftest-key.pem /tmp/tls-selftest-cert.pem; \
+    if [ "$rc" -ne 0 ]; then echo "FATAL: OpenSSL TLS self-test failed (rc=$rc) -- corrupt libcrypto/libssl, refusing to ship"; exit 1; fi; \
+    echo "OpenSSL TLS self-test passed"
 
 # Patched server + web client.
 COPY --from=server-builder /jellyfin /jellyfin
