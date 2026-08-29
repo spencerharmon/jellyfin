@@ -35,17 +35,33 @@ if [ -f "$NETWORK_CONFIG_DEFAULT" ] && [ ! -e "$CONFIG_DIR/network.xml" ]; then
     log "seeded cutover-safe network.xml -> $CONFIG_DIR/network.xml"
 fi
 
-# 3. Install staged plugin folders (each immediate subdir is one plugin) if not already present.
+# 3. Install/UPDATE staged plugin folders (each immediate subdir is one plugin). A staged plugin
+#    is installed when absent, and UPDATED IN PLACE when its baked meta.json version differs from
+#    the installed one. Version is the deploy contract: the image bakes the plugin at a pinned
+#    version (build.yaml), so a plugin code change MUST bump that version to actually roll out.
+#    Plugin CONFIGURATION lives in a separate dir (plugins/configurations/) and is never touched
+#    here, so an update preserves operator config across restarts. Same-version -> left as-is.
+plugin_meta_version() {  # $1 = plugin dir; echoes the meta.json "version" or empty
+    _m="$1/meta.json"
+    [ -f "$_m" ] || { echo ""; return; }
+    sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_m" | head -n1
+}
 if [ -d "$PLUGIN_PRELOAD_DIR" ]; then
     for plugdir in "$PLUGIN_PRELOAD_DIR"/*/; do
         [ -d "$plugdir" ] || continue   # no matches -> literal glob; skip
         name=$(basename "$plugdir")
         target="$DATA_DIR/plugins/$name"
-        if [ -e "$target" ]; then
-            log "plugin '$name' already installed at $target — leaving as-is"
+        staged_ver=$(plugin_meta_version "${plugdir%/}")
+        installed_ver=$(plugin_meta_version "$target")
+        if [ -e "$target" ] && [ -n "$staged_ver" ] && [ "$staged_ver" = "$installed_ver" ]; then
+            log "plugin '$name' already at version '$installed_ver' — leaving as-is"
+        elif [ -e "$target" ]; then
+            rm -rf "$target"
+            cp -a "$plugdir" "$target"
+            log "updated plugin '$name' '$installed_ver' -> '$staged_ver' (config preserved)"
         else
             cp -a "$plugdir" "$target"
-            log "installed plugin '$name' -> $target"
+            log "installed plugin '$name' version '$staged_ver' -> $target"
         fi
     done
 fi

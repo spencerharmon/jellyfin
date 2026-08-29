@@ -92,10 +92,10 @@ RUN dotnet publish Jellyfin.Pgsql/Jellyfin.Pgsql.csproj \
 # Stage 2c — build the phantom-library plugin (baked; postgres-capable, pinned ref)
 ########################################
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS phantom-plugin-builder
-# Pinned phantom-library commit: PhantomDb Postgres provider (plugin 0.4.0.0) +
+# Pinned phantom-library commit: PhantomDb Postgres provider (plugin 0.5.0.0) +
 # availability-probe redesign (indexer abstention/NoCapableIndexer, breadth-first
 # per-series sweep, priority-aware + user-yielding scheduler).
-ARG PHANTOM_LIBRARY_REF=72a8287dc7861f25b8d26fa6e7ded9f2256a44cf
+ARG PHANTOM_LIBRARY_REF=7f462b4f5745819f09badd6b269520e4e42399ea
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 WORKDIR /phantom
 # jprm (Jellyfin Plugin Repository Manager) produces a correct standalone plugin package; the SDK
@@ -104,6 +104,12 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git python3 python3-pip ca-certificates unzip \
  && rm -rf /var/lib/apt/lists/* \
  && pip install --no-cache-dir --break-system-packages jprm
+# CACHE-BUST: pin this + every following layer to the ref's commit content. A bare
+# `git checkout ${PHANTOM_LIBRARY_REF}` inside the RUN below did NOT reliably invalidate the
+# build-layer cache when the ref changed, so a version bump shipped a STALE plugin DLL under a
+# new image tag. Fetching the ref's commit metadata (content changes per ref) forces a rebuild
+# of the plugin whenever PHANTOM_LIBRARY_REF changes.
+ADD https://api.github.com/repos/spencerharmon/phantom-library/commits/${PHANTOM_LIBRARY_REF} /tmp/phantom-ref.json
 # Clone phantom-library at the pinned ref, then replace its `jellyfin/` submodule dir with THIS
 # image's fork source so the plugin's ProjectReferences bind against the exact patched fork we ship.
 RUN git clone https://github.com/spencerharmon/phantom-library.git . \
