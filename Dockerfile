@@ -95,7 +95,7 @@ FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS phantom-plugin-builder
 # Pinned phantom-library commit: PhantomDb Postgres provider (plugin 0.5.0.0) +
 # availability-probe redesign (indexer abstention/NoCapableIndexer, breadth-first
 # per-series sweep, priority-aware + user-yielding scheduler).
-ARG PHANTOM_LIBRARY_REF=2fa68a25f02026fc22e8f38ab65af5e1fe14e595
+ARG PHANTOM_LIBRARY_REF=286771141ac0a9efd6bee886ac902957a577c144
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 WORKDIR /phantom
 # jprm (Jellyfin Plugin Repository Manager) produces a correct standalone plugin package; the SDK
