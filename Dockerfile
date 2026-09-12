@@ -98,7 +98,7 @@ FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS phantom-plugin-builder
 # on Postgres) and adds a PHANTOM_METRICS_OTLP_ENABLED env fallback so the deploy
 # can turn the exporter on. Also catches the baked plugin up to main tip (P8
 # load-time rig/dashboard/guard, availability-probe redesign, reaper fix).
-ARG PHANTOM_LIBRARY_REF=a849149e975afdfe4f8fb6dcb3b4670a4fc95b6b
+ARG PHANTOM_LIBRARY_REF=eac6bc59e11cf620572ffb869e9410385969c9a9
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 WORKDIR /phantom
 # jprm (Jellyfin Plugin Repository Manager) produces a correct standalone plugin package; the SDK
