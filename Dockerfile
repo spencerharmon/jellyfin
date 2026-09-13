@@ -98,7 +98,7 @@ FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS phantom-plugin-builder
 # on Postgres) and adds a PHANTOM_METRICS_OTLP_ENABLED env fallback so the deploy
 # can turn the exporter on. Also catches the baked plugin up to main tip (P8
 # load-time rig/dashboard/guard, availability-probe redesign, reaper fix).
-ARG PHANTOM_LIBRARY_REF=eac6bc59e11cf620572ffb869e9410385969c9a9
+ARG PHANTOM_LIBRARY_REF=675e19b716864949d0860a9175b607f219003313
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 WORKDIR /phantom
 # jprm (Jellyfin Plugin Repository Manager) produces a correct standalone plugin package; the SDK
@@ -282,8 +282,11 @@ RUN set -eux; \
       || sed -i 's|</body>|<!--phantom-library-kebab--><script src="/Plugins/PhantomLibrary/kebab.js" defer></script></body>|' "$idx"; \
     grep -q 'phantom-library-badges' "$idx" \
       || sed -i 's|</body>|<!--phantom-library-badges--><script src="/Plugins/PhantomLibrary/badges.js" defer></script></body>|' "$idx"; \
+    grep -q 'phantom-library-shelves' "$idx" \
+      || sed -i 's|</body>|<!--phantom-library-shelves--><script src="/Plugins/PhantomLibrary/shelves.js" defer></script></body>|' "$idx"; \
     grep -q 'phantom-library-kebab' "$idx"; \
-    grep -q 'phantom-library-badges' "$idx"
+    grep -q 'phantom-library-badges' "$idx"; \
+    grep -q 'phantom-library-shelves' "$idx"
 
 # Cutover-safe network.xml (bluegreen-dns-contract) as the seed default + entrypoint.
 COPY deploy/network.xml /usr/share/jellyfin/config-defaults/network.xml
