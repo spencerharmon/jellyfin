@@ -92,13 +92,19 @@ RUN dotnet publish Jellyfin.Pgsql/Jellyfin.Pgsql.csproj \
 # Stage 2c — build the phantom-library plugin (baked; postgres-capable, pinned ref)
 ########################################
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS phantom-plugin-builder
-# Pinned phantom-library commit (a849149, plugin 0.5.4): enables the dormant
-# list_view_load OTLP flow instrumentation for the Postgres deployment -- threads
-# the live PhantomDb.Backend into PhantomFlowMetrics (was mislabeled backend=sqlite
-# on Postgres) and adds a PHANTOM_METRICS_OTLP_ENABLED env fallback so the deploy
-# can turn the exporter on. Also catches the baked plugin up to main tip (P8
-# load-time rig/dashboard/guard, availability-probe redesign, reaper fix).
-ARG PHANTOM_LIBRARY_REF=c125831de58555162f0b08a953c2f4c27136f9ca
+# Pinned phantom-library commit (46157cf, plugin 0.5.7.6, phantom-library main tip):
+# carries the definitive per-attempt playback-outcome dual-emit (commit 2ab4144
+# "playback-outcome-real-cause-dual-emit-001"), which emits the
+# `phantom_playback_outcome_total` / `phantom_loadtime_rig_outcome_total` Prometheus-net
+# counters flux's phantom-library-green digest bump requires. The PREVIOUS pin
+# (c125831, 0.5.7.5) sat on a DIVERGENT Prowlarr/warmup branch that was NEVER merged to
+# main and did NOT contain the dual-emit metric at all -- a build off it published an
+# image whose baked plugin DLL lacked `phantom_playback_outcome_total` entirely (verified
+# by pulling the layer and byte-probing the DLL; see docs/tasks change record). Main tip
+# also retains the OTLP env fallback (PhantomMetricsExporter) and the postgres backend
+# threading. The 5 Prowlarr/warmup commits unique to c125831 are phantom-library's own
+# unmerged branch to reconcile upstream, not this image's to carry off a dead pin.
+ARG PHANTOM_LIBRARY_REF=46157cfeaef622bd58771d827f7f3031fb7638ad
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 WORKDIR /phantom
 # jprm (Jellyfin Plugin Repository Manager) produces a correct standalone plugin package; the SDK
