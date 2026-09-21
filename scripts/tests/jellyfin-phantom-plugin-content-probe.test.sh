@@ -175,7 +175,20 @@ for layer in reversed(layers):
             if f is None:
                 continue
             dll_bytes = f.read()
-            if dll_bytes.find(metric) >= 0:
+            # A .NET assembly stores the two kinds of strings in DIFFERENT encodings:
+            #   * metadata NAMES (type/method/field names like PhantomFlowMetrics)
+            #     live in the #Strings heap as UTF-8 (ASCII for these names), but
+            #   * STRING LITERALS -- e.g. the metric-name argument to
+            #     Metrics.CreateCounter("phantom_playback_outcome_total", ...) -- live
+            #     in the #US (user string) heap as UTF-16LE.
+            # `phantom_playback_outcome_total` is a string LITERAL, so it is baked as
+            # UTF-16LE, NOT ASCII. The original probe only did an ASCII bytes.find and
+            # therefore reported "does NOT contain" on a DLL that genuinely DOES ship the
+            # metric -- a false negative rooted in the encoding, not a stale plugin. Check
+            # BOTH encodings so the probe asserts the real presence of the literal.
+            metric_ascii = metric                      # UTF-8 / ASCII (#Strings, names)
+            metric_utf16 = metric.decode().encode("utf-16-le")  # #US string literals
+            if dll_bytes.find(metric_ascii) >= 0 or dll_bytes.find(metric_utf16) >= 0:
                 print("OK: %s (%d bytes) in layer %s contains %s"
                       % (name, len(dll_bytes), digest, metric.decode()))
                 sys.exit(0)
