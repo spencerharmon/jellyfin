@@ -107,7 +107,7 @@ FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS phantom-plugin-builder
 # unmerged branch to reconcile upstream, not this image's to carry off a dead pin. Verify
 # a bumped pin with scripts/tests/jellyfin-phantom-plugin-content-probe.test.sh against the
 # freshly published tag.
-ARG PHANTOM_LIBRARY_REF=89d1022819892b0a7fc06248cf34231bc395d666
+ARG PHANTOM_LIBRARY_REF=d9a58ece9e7111f86663efe0c608147c099205a3
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 WORKDIR /phantom
 # jprm (Jellyfin Plugin Repository Manager) produces a correct standalone plugin package; the SDK
