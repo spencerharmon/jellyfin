@@ -92,21 +92,9 @@ RUN dotnet publish Jellyfin.Pgsql/Jellyfin.Pgsql.csproj \
 # Stage 2c — build the phantom-library plugin (baked; postgres-capable, pinned ref)
 ########################################
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS phantom-plugin-builder
-# Pinned phantom-library commit (89d1022, phantom-library main's current tracked tip):
-# re-bumped forward from the prior 46157cf pin to keep tracking main. Both carry the
-# definitive per-attempt playback-outcome dual-emit (commit 2ab4144
-# "playback-outcome-real-cause-dual-emit-001"), which emits the
-# `phantom_playback_outcome_total` / `phantom_loadtime_rig_outcome_total` Prometheus-net
-# counters flux's phantom-library-green digest bump requires. The PREVIOUS pin
-# (c125831, 0.5.7.5) sat on a DIVERGENT Prowlarr/warmup branch that was NEVER merged to
-# main and did NOT contain the dual-emit metric at all -- a build off it published an
-# image whose baked plugin DLL lacked `phantom_playback_outcome_total` entirely (verified
-# by pulling the layer and byte-probing the DLL; see docs/tasks change record). Main tip
-# also retains the OTLP env fallback (PhantomMetricsExporter) and the postgres backend
-# threading. The 5 Prowlarr/warmup commits unique to c125831 are phantom-library's own
-# unmerged branch to reconcile upstream, not this image's to carry off a dead pin. Verify
-# a bumped pin with scripts/tests/jellyfin-phantom-plugin-content-probe.test.sh against the
-# freshly published tag.
+# Plugin 0.5.7.7 from phantom-library main: playback-outcome zero seeding and
+# OTLP runtime provenance. Verify the published DLL, not just the older metric,
+# with scripts/tests/jellyfin-phantom-zero-seed-probe.test.sh FULL_FORK_SHA.
 ARG PHANTOM_LIBRARY_REF=d9a58ece9e7111f86663efe0c608147c099205a3
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 WORKDIR /phantom
