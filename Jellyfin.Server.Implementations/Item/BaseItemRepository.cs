@@ -681,14 +681,16 @@ public sealed class BaseItemRepository
             .SelectMany(f => f.Values)
             .Distinct()
             .ToArray();
-        var existingValues = context.ItemValues
-            .Select(e => new
+        // Keep the indexed (Type, Value) columns intact. Concatenating them scans
+        // the entire value dictionary for every saved batch.
+        var existingValues = allListedItemValues.GroupBy(e => e.MagicNumber)
+            .SelectMany(group =>
             {
-                item = e,
-                Key = e.Type + "+" + e.Value
+                var type = group.Key;
+                var values = group.Select(e => e.Value).ToArray();
+                return context.ItemValues.Where(e => e.Type == type)
+                    .WhereOneOrMany(values, e => e.Value).ToArray();
             })
-            .Where(f => allListedItemValues.Select(e => $"{(int)e.MagicNumber}+{e.Value}").Contains(f.Key))
-            .Select(e => e.item)
             .ToArray();
         var missingItemValues = allListedItemValues.Except(existingValues.Select(f => (MagicNumber: f.Type, f.Value))).Select(f => new ItemValue()
         {
@@ -2441,8 +2443,12 @@ public sealed class BaseItemRepository
 
         if (filter.ExcludeProviderIds is not null && filter.ExcludeProviderIds.Count > 0)
         {
-            var exclude = filter.ExcludeProviderIds.Select(e => $"{e.Key}:{e.Value}").ToArray();
-            baseQuery = baseQuery.Where(e => e.Provider!.Select(f => f.ProviderId + ":" + f.ProviderValue)!.All(f => !exclude.Contains(f)));
+            foreach (var pair in filter.ExcludeProviderIds)
+            {
+                var providerId = pair.Key;
+                var providerValue = pair.Value;
+                baseQuery = baseQuery.Where(e => !e.Provider!.Any(f => f.ProviderId == providerId && f.ProviderValue == providerValue));
+            }
         }
 
         if (filter.HasAnyProviderId is not null && filter.HasAnyProviderId.Count > 0)
@@ -2454,10 +2460,20 @@ public sealed class BaseItemRepository
                 baseQuery = baseQuery.Where(e => e.Provider!.Any(f => includeAny.Contains(f.ProviderId)));
             }
 
-            var includeSelected = filter.HasAnyProviderId.Where(e => !string.IsNullOrEmpty(e.Value)).Select(e => $"{e.Key}:{e.Value}").ToArray();
+            var includeSelected = filter.HasAnyProviderId.Where(e => !string.IsNullOrEmpty(e.Value)).ToArray();
             if (includeSelected.Length > 0)
             {
-                baseQuery = baseQuery.Where(e => e.Provider!.Select(f => f.ProviderId + ":" + f.ProviderValue)!.Any(f => includeSelected.Contains(f)));
+                IQueryable<Guid> matchingIds = context.BaseItemProviders.Where(e => false).Select(e => e.ItemId);
+                foreach (var pair in includeSelected)
+                {
+                    var providerId = pair.Key;
+                    var providerValue = pair.Value;
+                    matchingIds = matchingIds.Concat(context.BaseItemProviders
+                        .Where(e => e.ProviderId == providerId && e.ProviderValue == providerValue)
+                        .Select(e => e.ItemId));
+                }
+
+                baseQuery = baseQuery.Where(e => matchingIds.Contains(e.Id));
             }
         }
 

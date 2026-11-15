@@ -80,6 +80,17 @@ jobs:
       # container now egresses normally — no per-job network override needed here.
       # (act_runner ignores a `--network=host` option on job containers anyway; it
       # attaches them to its configured `container.network`.)
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: phantom_test
+          POSTGRES_PASSWORD: phantom-disposable-ci
+          POSTGRES_DB: phantom_hot_queries_ci
+        options: >-
+          --tmpfs /var/lib/postgresql/data:rw,size=4g
+          --health-cmd "pg_isready -U phantom_test -d phantom_hot_queries_ci"
+          --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
       # NOTE: `actions/checkout@v4` is a Node.js action, and this job runs
       # inside the plain `mcr.microsoft.com/dotnet/sdk:9.0` container (no node
@@ -101,6 +112,10 @@ jobs:
         run: ./tools/zuul-ci/patch-apply-verify.sh
       - name: build the fork + assert the four patched DLL surfaces
         run: ./tools/zuul-ci/build-verify.sh
+      - name: PostgreSQL repository parity and hot-query plans (4M ItemValues)
+        env:
+          PHANTOM_TEST_POSTGRES: Host=postgres;Port=5432;Username=phantom_test;Password=phantom-disposable-ci;Database=phantom_hot_queries_ci
+        run: bash scripts/tests/phantom-postgres-hot-queries.test.sh
 
   # ---------------------------------------------------------------------------
   # Image build (always, as a check) + publish (merge/push to tracked branch

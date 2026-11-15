@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../Jellyfin.Server.Implementations/Jellyfin.Server.Implementations.csproj" />
+    <PackageReference Include="Moq" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" VersionOverride="9.0.4" />
+    <PackageReference Include="Npgsql" VersionOverride="9.0.4" />
+    <!-- Compile the unchanged vendored provider against LOCAL Jellyfin assemblies, not
+         its project's NuGet Jellyfin 10.11.11 dependency graph. No provider substitute. -->
+    <Compile Include="../../Jellyfin.Pgsql/Database/PgSqlDatabaseProvider.cs" Link="PgSqlDatabaseProvider.cs" />
+    <Compile Include="../../Jellyfin.Pgsql/Migrations/*.cs" Link="Migrations/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>
